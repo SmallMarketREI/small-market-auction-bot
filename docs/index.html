@@ -68,7 +68,7 @@ a{color:#d7dce4}
 <button onclick="showTab('past',this)">Past Auctions</button>
 <button onclick="showTab('watch',this)">Auction Watch</button>
 <button onclick="showTab('evaluator',this)">Property Evaluator</button>
-<button onclick="showTab('audit',this)">Audit</button>
+<button onclick="showTab('review',this)">Needs Review</button>
 </div>
 </aside>
 
@@ -116,6 +116,7 @@ a{color:#d7dce4}
 <div class="panelhead"><h2>Property Evaluator</h2></div>
 <div class="notice">Find similar auction comps by city/ZIP + property type + size, then estimate value and a max buy price.</div>
 <div class="evalgrid">
+ <input id="eAddress" placeholder="Subject address (optional)">
  <input id="eCity" placeholder="City">
  <input id="eZip" placeholder="ZIP">
  <select id="eType"><option>House</option><option>Land</option><option>Mobile Home</option><option>Commercial</option></select>
@@ -124,6 +125,7 @@ a{color:#d7dce4}
  <input id="eProfit" placeholder="Target profit $" type="number">
 </div>
 <button class="primary" onclick="findSimilar()">Find Comps</button>
+<div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
 <div class="metrics">
  <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
  <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="mLow">$0</div></div>
@@ -136,13 +138,13 @@ a{color:#d7dce4}
 <div class="comparegrid" id="compareGrid"></div>
 </section>
 
-<section id="audit" class="section">
-<div class="panelhead"><h2>Audit</h2></div>
-<div class="notice">Live status of the daily automated update -- see scrape_runs in Supabase for full history.</div>
+<section id="review" class="section">
+<div class="panelhead"><h2>Needs Review</h2></div>
+<div class="notice">Past auctions with missing square footage, a stated-vs-county size mismatch, or a matched property record that doesn't look right -- worth a quick manual check before relying on these as comps.</div>
 <div class="scroll">
 <table>
-<thead><tr><th>Run</th><th>Source</th><th>Found</th><th>Added/Updated</th><th>Errors</th></tr></thead>
-<tbody id="auditRows"><tr><td colspan="5" class="loading">Loading...</td></tr></tbody>
+<thead><tr><th>Date</th><th>Address</th><th>City</th><th>State</th><th>Type</th><th>Reason</th><th></th></tr></thead>
+<tbody id="reviewRows"><tr><td colspan="7" class="loading">Loading...</td></tr></tbody>
 </table>
 </div>
 </section>
@@ -162,7 +164,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_tlLhHecuIMJdbVwBpucZhw_HypV4Gsl";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let past = [], watch = [], auditRunsData = [];
+let past = [], watch = [];
 let evalCandidates = [];
 
 const money=v=>v==null?"Unavailable":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
@@ -177,7 +179,7 @@ function showTab(id,btn){
  document.getElementById(id).classList.add("active");
  document.querySelectorAll(".nav button").forEach(el=>el.classList.remove("active"));
  btn.classList.add("active");
- document.getElementById("title").textContent={dashboard:"Dashboard",past:"Past Auctions",watch:"Auction Watch",evaluator:"Property Evaluator",audit:"Audit"}[id];
+ document.getElementById("title").textContent={dashboard:"Dashboard",past:"Past Auctions",watch:"Auction Watch",evaluator:"Property Evaluator",review:"Needs Review"}[id];
 }
 
 function percentile(values,p){
@@ -286,10 +288,14 @@ function renderWatch(){
 }
 
 function findSimilar(){
+ const address=(document.getElementById("eAddress").value||"").trim();
  const city=(document.getElementById("eCity").value||"").trim().toLowerCase();
  const zip=(document.getElementById("eZip").value||"").trim();
  const type=document.getElementById("eType").value;
  const subj=+document.getElementById("eSqft").value||0;
+
+ document.getElementById("evalSubjectLine").textContent = address ? `Evaluating: ${address}` : "";
+
  evalCandidates = past
   .filter(r=>r.published_final_sold_price!=null && r.comp_sqft!=null)
   .filter(r=>r.property_type===type)
@@ -297,9 +303,16 @@ function findSimilar(){
   .map(r=>({...r,sizeDiff:subj?Math.abs(r.comp_sqft-subj)/subj:null}))
   .filter(r=>r.sizeDiff===null || r.sizeDiff<=.30)
   .sort((a,b)=>{
-    const az=(zip&&a.zip===zip)?0:1,bz=(zip&&b.zip===zip)?0:1;
-    if(az!==bz)return az-bz;
-    if(a.sizeDiff!==null&&b.sizeDiff!==null)return a.sizeDiff-b.sizeDiff;
+    // Strongest comps first: same ZIP, then same city, then closest size.
+    // Property type is already a hard filter above, so every candidate here
+    // already matches on that.
+    const azip=(zip&&a.zip===zip)?0:1, bzip=(zip&&b.zip===zip)?0:1;
+    if(azip!==bzip) return azip-bzip;
+    const acity=(city&&(a.city||"").toLowerCase()===city)?0:1, bcity=(city&&(b.city||"").toLowerCase()===city)?0:1;
+    if(acity!==bcity) return acity-bcity;
+    if(a.sizeDiff!==null&&b.sizeDiff!==null) return a.sizeDiff-b.sizeDiff;
+    if(a.sizeDiff!==null) return -1;
+    if(b.sizeDiff!==null) return 1;
     return (b.auction_date||"").localeCompare(a.auction_date||"");
   });
 
@@ -340,38 +353,37 @@ function renderStats(){
  document.getElementById("statWatch").textContent = watch.length;
 }
 
-function renderAudit(){
- const auditRows=document.getElementById("auditRows");
- auditRows.innerHTML="";
- if(!auditRunsData.length){auditRows.innerHTML='<tr><td colspan="5" class="small">No scrape runs logged yet -- this fills in once the daily GitHub Action has run at least once.</td></tr>';return;}
- auditRunsData.forEach(r=>{
+function renderReview(){
+ const reviewRows=document.getElementById("reviewRows");
+ reviewRows.innerHTML="";
+ const flagged = past.filter(r=>r.review_flag)
+   .sort((a,b)=>(b.auction_date||"").localeCompare(a.auction_date||""));
+ if(!flagged.length){reviewRows.innerHTML='<tr><td colspan="7" class="small">Nothing needs review right now.</td></tr>';return;}
+ flagged.forEach(r=>{
   const tr=document.createElement("tr");
-  const when = r.run_at ? new Date(r.run_at).toLocaleString() : "";
-  tr.innerHTML=`<td>${when}</td><td>${r.source||""}</td><td>${r.records_found??""}</td><td>${r.records_added??r.records_updated??""}</td><td>${r.errors?('<span class="bad">'+r.errors+'</span>'):"-"}</td>`;
-  auditRows.appendChild(tr);
+  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.property_type||""}</td><td>${r.review_reason||""}</td><td><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Zillow</a></td>`;
+  reviewRows.appendChild(tr);
  });
 }
 
 async function loadData(){
  const subtitle = document.getElementById("subtitle");
  try {
-  const [pastResp, watchResp, auditResp] = await Promise.all([
+  const [pastResp, watchResp] = await Promise.all([
     sb.from("past_auctions").select("*").order("auction_date", {ascending:false}).limit(2000),
     sb.from("watch_auctions").select("*").order("auction_date", {ascending:true}).limit(500),
-    sb.from("scrape_runs").select("*").order("run_at", {ascending:false}).limit(20),
   ]);
   if (pastResp.error) throw pastResp.error;
   if (watchResp.error) throw watchResp.error;
   past = pastResp.data || [];
   watch = watchResp.data || [];
-  auditRunsData = (auditResp && auditResp.data) || [];
 
   initFilters();
   renderStats();
   renderRecent();
   renderPast();
   renderWatch();
-  renderAudit();
+  renderReview();
   subtitle.textContent = `Newest auction data, enriched comps, and verified bidding links. Loaded ${past.length} past + ${watch.length} watch records.`;
  } catch (err) {
   console.error(err);
