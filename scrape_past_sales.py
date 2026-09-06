@@ -38,6 +38,14 @@ def build_past_row(detail: dict) -> dict:
         "tax_parcel": parcel,
         "lat": s["lat"],
         "lng": s["lng"],
+        # These five must always be present (even as null) -- Supabase's bulk
+        # upsert rejects a batch where different rows have different sets of
+        # keys (PGRST102: "All object keys must match").
+        "comp_sqft": None,
+        "comp_sqft_source": None,
+        "comp_sqft_source_url": None,
+        "comp_sqft_quality": None,
+        "comp_sqft_note": None,
     }
     if stated_sqft:
         row["comp_sqft"] = stated_sqft
