@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
 """Daily job: fill in official square footage for past_auctions rows that are
 missing it (or only have the auctioneer's stated figure), using the WV Real
-Estate Assessment county record.
+Estate Assessment county record. Also maintains review_flag/review_reason on
+every row it touches, so the dashboard's "Needs Review" tab has something
+concrete to show: missing square footage, a stated-vs-county size mismatch,
+or a matched parcel that doesn't look residential.
 
 Pipeline per row:
   1. Use the listing's lat/lng (captured by scrape_past_sales.py) to query the
      statewide ArcGIS parcel layer for the authoritative County/District/Map/
-     Parcel -- this is more reliable than trusting the auctioneer's listing
-     text alone, though we fall back to that text if the point lookup misses.
+     Parcel -- widening the search area in a couple of steps if the exact
+     point doesn't land inside a mapped parcel (see wv_assessment.py), and
+     preferring whichever nearby parcel's own address text best matches the
+     listing's stated address when more than one comes back.
   2. Search mapwv.gov's WV Assessment app by County + Map + Parcel to resolve
      the Root Parcel ID.
   3. Fetch that parcel's Assessment Detail page and read "Sum of Structure
-     Areas" (confirmed during recon to be the same figure as SFLA / stated
-     listing sqft).
+     Areas" plus its Property Class (used for the residential-match check).
 
-Rows this can't resolve (no lat/lng, no parcel match, or the county's data
-just doesn't have a structure recorded) are left alone -- they keep whatever
-comp_sqft they already had (possibly none), and show up in scrape_runs'
-`errors` so you can see how many are outstanding.
+Rows outside West Virginia are recognized and flagged plainly rather than
+run through a lookup that can never work for them.
 """
 import sys
 
 from common import supabase_client, wv_assessment
+
+# Auctioneer-stated vs. WV Assessment verified sqft differing by more than
+# this fraction gets flagged for a human to double check (typo in the
+# listing, a mismatched parcel, or a genuinely renovated/expanded structure
+# the county record hasn't caught up to yet).
+CONFLICT_THRESHOLD = 0.20
+
+_SELECT_FIELDS = (
+    "id,city,state,zip,address,lat,lng,tax_district,tax_map,tax_parcel,"
+    "comp_sqft,comp_sqft_source,property_type"
+)
 
 
 def candidates():
@@ -29,17 +42,14 @@ def candidates():
     the auctioneer's listing copy rather than a verified county record."""
     seen = {}
     missing = supabase_client.select(
-        "past_auctions",
-        {"select": "id,city,state,zip,address,lat,lng,tax_district,tax_map,tax_parcel,comp_sqft_source",
-         "comp_sqft": "is.null"},
+        "past_auctions", {"select": _SELECT_FIELDS, "comp_sqft": "is.null"},
     )
     for r in missing:
         seen[r["id"]] = r
 
     stated_only = supabase_client.select(
         "past_auctions",
-        {"select": "id,city,state,zip,address,lat,lng,tax_district,tax_map,tax_parcel,comp_sqft_source",
-         "comp_sqft_source": "eq.Auction listing (auctioneer-stated)"},
+        {"select": _SELECT_FIELDS, "comp_sqft_source": "eq.Auction listing (auctioneer-stated)"},
     )
     for r in stated_only:
         seen[r["id"]] = r
@@ -48,11 +58,24 @@ def candidates():
 
 
 def resolve_one(session, row):
+    """Returns (update_fields, log_reason).
+
+    update_fields is always a dict to write back to the row -- it always sets
+    review_flag/review_reason (even on failure, so the Needs Review tab has
+    something concrete to show), and additionally carries comp_sqft/etc. on
+    success. log_reason is a short string for scrape_runs' internal error
+    log, or None when everything resolved cleanly with nothing to flag.
+    """
+    state = (row.get("state") or "").strip().upper()
+    if state and state not in ("WV", "WEST VIRGINIA"):
+        reason = "Outside West Virginia -- the WV Assessment lookup doesn't apply to this property"
+        return {"review_flag": True, "review_reason": reason}, reason
+
     lat, lng = row.get("lat"), row.get("lng")
     raw_county = map_ = parcel = None
 
     if lat and lng:
-        arcgis = wv_assessment.lookup_parcel_by_latlng(session, lat, lng)
+        arcgis = wv_assessment.lookup_parcel_by_latlng(session, lat, lng, address_hint=row.get("address"))
         if arcgis:
             raw_county = arcgis.get("COUNTY")
             map_ = arcgis.get("Map") or row.get("tax_map")
@@ -64,17 +87,12 @@ def resolve_one(session, row):
         parcel = row.get("tax_parcel")
 
     if not raw_county:
-        # No spatial match (or no lat/lng at all) -- without a county we can't
-        # search the assessment database. A future improvement: maintain a
-        # WV city -> county lookup table as a fallback here.
-        return None, "no county resolved (missing/failed lat-lng parcel lookup)"
+        reason = "No coordinates on file, or the point didn't land in a mapped WV parcel"
+        return {"review_flag": True, "review_reason": reason}, reason
 
     # Confirmed in production 2026-09: the ArcGIS parcel layer's COUNTY field
-    # actually comes back as WV's numeric county code (e.g. '40', '06'), not a
-    # spelled-out name -- the earlier "unrecognized county name" errors were
-    # this client trying to look up '40' as if it were a county name. Handle
-    # both shapes so this keeps working if a future ArcGIS response ever does
-    # send a name instead.
+    # comes back as WV's numeric county code (e.g. '40'), not a spelled-out
+    # name -- handle both shapes in case that ever changes.
     raw_county_str = str(raw_county).strip()
     if raw_county_str.isdigit():
         county_code = int(raw_county_str)
@@ -84,31 +102,65 @@ def resolve_one(session, row):
         county_code = wv_assessment.COUNTY_NAME_TO_CODE.get(county_name)
 
     if not county_code:
-        return None, f"unrecognized county from ArcGIS: {raw_county!r}"
+        reason = f"Unrecognized county from the state map service: {raw_county!r}"
+        return {"review_flag": True, "review_reason": reason}, reason
 
     if not (map_ and parcel):
-        return None, "no tax map/parcel available to search with"
+        reason = "No tax map/parcel number available to search with"
+        return {"review_flag": True, "review_reason": reason, "tax_county": county_name}, reason
 
     results = wv_assessment.search_assessment(session, county_code, map_=map_, parcel=parcel)
     if not results:
-        return None, f"no WV Assessment match for county={county_code} map={map_} parcel={parcel}"
+        reason = f"No WV Assessment match for county={county_code} map={map_} parcel={parcel}"
+        return {"review_flag": True, "review_reason": reason, "tax_county": county_name}, reason
 
     root_pid = results[0].get("root_pid")
     if not root_pid:
-        return None, "matched a record but couldn't find its detail-page id"
+        reason = "Matched a record but couldn't find its detail-page id"
+        return {"review_flag": True, "review_reason": reason, "tax_county": county_name}, reason
 
     detail = wv_assessment.get_assessment_detail(session, root_pid)
-    if not detail.get("comp_sqft"):
-        return None, f"matched parcel {root_pid} but it has no recorded structure area"
+    property_class = detail.get("property_class")
 
-    return {
+    if not detail.get("comp_sqft"):
+        reason = f"Matched parcel {detail.get('parcel_id_formatted') or root_pid}, but it has no recorded structure area"
+        return {
+            "review_flag": True,
+            "review_reason": reason,
+            "tax_county": county_name,
+            "property_class": property_class,
+        }, reason
+
+    fields = {
         "comp_sqft": detail["comp_sqft"],
         "comp_sqft_source": "WV Assessment (verified)",
         "comp_sqft_source_url": detail["source_url"],
         "comp_sqft_quality": "County record (WV Real Estate Assessment)",
         "comp_sqft_note": f"Matched parcel {detail.get('parcel_id_formatted') or root_pid}.",
         "tax_county": county_name,
-    }, None
+        "property_class": property_class,
+    }
+
+    review_reason = None
+    if row.get("property_type") == "House" and property_class and "residential" not in property_class.lower():
+        review_reason = (
+            f"Matched parcel's property class is '{property_class}', which doesn't look "
+            "residential -- may be the wrong parcel"
+        )
+
+    prior_sqft = row.get("comp_sqft")
+    if prior_sqft and row.get("comp_sqft_source") == "Auction listing (auctioneer-stated)":
+        diff = abs(detail["comp_sqft"] - prior_sqft) / prior_sqft
+        if diff > CONFLICT_THRESHOLD:
+            conflict_note = (
+                f"Auctioneer listed {prior_sqft:g} sq ft; WV Assessment shows "
+                f"{detail['comp_sqft']:g} sq ft ({diff * 100:.0f}% difference)"
+            )
+            review_reason = f"{review_reason}; {conflict_note}" if review_reason else conflict_note
+
+    fields["review_flag"] = bool(review_reason)
+    fields["review_reason"] = review_reason
+    return fields, review_reason
 
 
 def run(limit: int = None):
@@ -119,28 +171,32 @@ def run(limit: int = None):
     print(f"{len(rows)} past_auctions rows need square footage enrichment")
 
     updated = 0
-    unresolved = []
+    flagged = 0
+    logged_reasons = []
     for row in rows:
         try:
-            fields, reason = resolve_one(session, row)
+            fields, log_reason = resolve_one(session, row)
         except Exception as e:  # noqa: BLE001
-            fields, reason = None, f"error: {e}"
+            fields = {"review_flag": True, "review_reason": f"Enrichment error: {e}"}
+            log_reason = f"error: {e}"
 
-        if fields:
-            supabase_client.update_by_id("past_auctions", row["id"], fields)
+        supabase_client.update_by_id("past_auctions", row["id"], fields)
+        if fields.get("comp_sqft"):
             updated += 1
-        else:
-            unresolved.append(f"{row.get('address')}, {row.get('city')}: {reason}")
+        if fields.get("review_flag"):
+            flagged += 1
+        if log_reason:
+            logged_reasons.append(f"{row.get('address')}, {row.get('city')}: {log_reason}")
 
-    print(f"Enriched {updated} rows; {len(unresolved)} left unresolved")
+    print(f"Enriched {updated} rows with verified sqft; {flagged} flagged for review")
 
     supabase_client.log_run(
         "sqft_enrichment",
         records_found=len(rows),
         records_updated=updated,
-        errors="; ".join(unresolved[:20]) if unresolved else None,
+        errors="; ".join(logged_reasons[:20]) if logged_reasons else None,
     )
-    return {"checked": len(rows), "updated": updated, "unresolved": unresolved}
+    return {"checked": len(rows), "updated": updated, "flagged": flagged}
 
 
 if __name__ == "__main__":
