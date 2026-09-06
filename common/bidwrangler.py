@@ -17,8 +17,9 @@ Two ways to discover auction ids:
      source of PAST/SOLD auction ids (the marketing site is the durable public
      archive; BidWrangler itself may not keep completed auctions in its own
      feed indefinitely).
-  2. bid.joerpyleauctions.com/api/feed/all (paginated) lists currently
-     active/upcoming auctions directly -- the source for the Watch tab.
+  2. bid.joerpyleauctions.com/api/feed?indices={company_id} (paginated) lists
+     currently active/upcoming auctions for one company on the platform
+     directly -- the source for the Watch tab.
 
 Each auction's item description text also contains the county tax map
 reference the auctioneer includes in every listing, e.g.
@@ -34,6 +35,14 @@ from . import config
 
 RESULTS_BASE = "https://www.joerpyleauctions.com/results"
 BID_BASE = "https://bid.joerpyleauctions.com"
+
+# BidWrangler is a shared platform -- confirmed in production 2026-09 that
+# /api/feed/all is a platform-WIDE feed covering every auction company hosted
+# on BidWrangler, not just Joe R Pyle's (it returned things like a Uniontown,
+# PA tools/mower estate auction that isn't a Pyle real-estate listing at all).
+# Every Pyle auction detail response carries this same company_id, and
+# /api/feed?indices=<company_id> is the properly scoped, Pyle-only feed.
+PYLE_COMPANY_ID = 20
 
 _AUCTION_LINK_RE = re.compile(r"/auctions/detail/bw(\d+)")
 
@@ -82,17 +91,25 @@ def list_result_page_auction_ids(session: requests.Session, max_pages: int = 40,
 
 def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_page: int = 50):
     """Page through bid.joerpyleauctions.com's feed endpoint(s) for every
-    currently listed (active or upcoming) auction id.
+    currently listed (active or upcoming) Joe R. Pyle auction id.
 
     There are two feed endpoints seen during recon:
-      /api/feed/all              -- looked like a general/global listing
-      /api/feed?active=true&indices=20  -- 'indices=20' matches Joe R. Pyle's
-                                            own company_id (20), seen on every
-                                            auction detail response -- likely
-                                            the properly site-scoped feed.
-    We try /api/feed/all first (simpler params) and fall back to the
-    indices=20 form if that comes back empty, logging enough detail either way
-    to diagnose from the Action's log output if both come back empty.
+      /api/feed?active=true&indices=20  -- scoped to Pyle's own company_id
+                                            (20, confirmed on every auction
+                                            detail response) -- the correct
+                                            source for this business, tried
+                                            first.
+      /api/feed/all                     -- confirmed in production to be a
+                                            platform-WIDE feed across every
+                                            company hosted on BidWrangler, not
+                                            just Pyle (it returned an unrelated
+                                            estate/tools auction from another
+                                            auctioneer). Used only as a
+                                            fallback, and even then filtered
+                                            down to company_id == PYLE_COMPANY_ID
+                                            so an unrelated auctioneer's
+                                            listings never end up on this
+                                            dashboard.
     """
     fields = (
         "type,id,items_count,published_items_count,name,status,"
@@ -123,7 +140,7 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
                         collected.extend(value[key])
         return collected
 
-    def _fetch(url, extra_params, label):
+    def _fetch_items(url, extra_params, label):
         found = []
         for page in range(1, max_pages + 1):
             params = {"fields": fields, "page": page, "per_page": per_page}
@@ -141,22 +158,27 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
             print(f"[{label}] page {page}: parsed {len(items)} item(s)")
             if not items:
                 break
-            for item in items:
-                if item.get("id"):
-                    found.append(item["id"])
+            found.extend(items)
             if len(items) < per_page:
                 break
             time.sleep(config.REQUEST_DELAY_SECONDS)
         return found
 
-    ids = _fetch(f"{BID_BASE}/api/feed/all", {"include_syndicated": "true", "version": 2}, "feed/all")
+    scoped_items = _fetch_items(
+        f"{BID_BASE}/api/feed",
+        {"active": "true", "include_recently_complete_auctions_to_active": "false", "indices": PYLE_COMPANY_ID},
+        "feed?indices=20",
+    )
+    ids = [item["id"] for item in scoped_items if item.get("id")]
+
     if not ids:
-        print("[feed] /api/feed/all returned nothing -- trying the company-scoped /api/feed endpoint")
-        ids = _fetch(
-            f"{BID_BASE}/api/feed",
-            {"active": "true", "include_recently_complete_auctions_to_active": "false", "indices": 20},
-            "feed?indices=20",
-        )
+        print("[feed] company-scoped feed returned nothing -- falling back to the "
+              "platform-wide feed, filtered to Joe R. Pyle's company_id")
+        all_items = _fetch_items(f"{BID_BASE}/api/feed/all", {"include_syndicated": "true", "version": 2}, "feed/all")
+        ids = [item["id"] for item in all_items if item.get("id") and item.get("company_id") == PYLE_COMPANY_ID]
+        print(f"[feed] platform-wide feed had {len(all_items)} total item(s); "
+              f"{len(ids)} belong to company_id={PYLE_COMPANY_ID}")
+
     return ids
 
 
