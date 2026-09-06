@@ -242,7 +242,7 @@ function renderRecent(){
     <div class="meta">Local comparison set: ${vals.length} sale${vals.length===1?"":"s"}</div>
   </div>
   <div class="marketpos"><div class="marketlabel">${label}</div><div class="marketdesc">${desc}</div></div>
-  <div style="margin-top:10px"><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Open on Zillow</a></div>`;
+  <div style="margin-top:10px;display:flex;gap:8px">${r.source_url?`<a class="linkbtn" href="${r.source_url}" target="_blank" rel="noopener">View Pyle Result</a>`:""}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Open on Zillow</a></div>`;
   recentGrid.appendChild(div);
  });
 }
@@ -341,7 +341,7 @@ function renderEvaluator(vals){
   div.innerHTML=`<div class="comptitle">${r.address}, ${r.city}</div><div class="meta">${r.auction_date||""} · ${r.property_type||""}</div><div class="price">${money(r.published_final_sold_price)}</div>
   <div class="county"><div class="meta">Sq Ft: ${Number(r.comp_sqft).toLocaleString()}</div><div class="meta">Auction PPSF: $${p.toFixed(2)}</div><div class="meta">Size difference: ${r.sizeDiff===null?"Not calculated":Math.round(r.sizeDiff*100)+"%"}</div><div class="meta">Source: ${r.comp_sqft_source||""}</div></div>
   <div class="marketpos"><div class="marketlabel">${label}</div><div class="marketdesc">${desc}</div></div>
-  <div style="margin-top:10px"><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Open on Zillow</a></div>`;
+  <div style="margin-top:10px;display:flex;gap:8px">${r.source_url?`<a class="linkbtn" href="${r.source_url}" target="_blank" rel="noopener">View Pyle Result</a>`:""}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Open on Zillow</a></div>`;
   compareGrid.appendChild(div);
  });
 }
