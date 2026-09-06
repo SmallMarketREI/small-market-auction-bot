@@ -78,13 +78,25 @@ def new_session() -> requests.Session:
     return s
 
 
-def lookup_parcel_by_latlng(session: requests.Session, lat: float, lng: float):
+def lookup_parcel_by_latlng(session: requests.Session, lat: float, lng: float, address_hint: str = None):
     """Point-in-polygon query against the statewide parcel layer. Returns a
     dict with County/Dist/Map/Parcel/CleanParcelID/FullPhysicalAddress, or
-    None if the point doesn't land in a mapped parcel (rural gaps happen)."""
+    None if no parcel could be found even after widening the search.
+
+    A listing's lat/lng sometimes lands just outside its own parcel's polygon
+    (rounding, or a pin dropped near a driveway/road edge) -- confirmed in
+    production 2026-09 for several real addresses that have coordinates but
+    still missed on an exact-point query. So this tries the exact point
+    first, then retries with a small buffer (ArcGIS Server supports this via
+    the distance/units params on a point query), widening twice before giving
+    up. A buffered search can return several nearby parcels, not just one --
+    when it does, `address_hint` (the auction's own stated address) is used
+    to pick whichever candidate's own address text overlaps it best, rather
+    than blindly taking the first result.
+    """
     if lat is None or lng is None:
         return None
-    params = {
+    base_params = {
         "f": "json",
         "geometry": f"{lng},{lat}",
         "geometryType": "esriGeometryPoint",
@@ -93,13 +105,27 @@ def lookup_parcel_by_latlng(session: requests.Session, lat: float, lng: float):
         "outFields": "COUNTY,Dist,Map,Parcel,CleanParcelID,FullPhysicalAddress",
         "returnGeometry": "false",
     }
-    resp = session.get(ARCGIS_PARCELS_URL, params=params, timeout=20)
-    resp.raise_for_status()
-    data = resp.json()
-    features = data.get("features") or []
-    if not features:
-        return None
-    return features[0].get("attributes")
+    hint_tokens = set(re.findall(r"[a-z0-9]+", address_hint.lower())) if address_hint else set()
+
+    for distance in (0, 50, 150):
+        params = dict(base_params)
+        if distance:
+            params["distance"] = distance
+            params["units"] = "esriSRUnit_Meter"
+        resp = session.get(ARCGIS_PARCELS_URL, params=params, timeout=20)
+        resp.raise_for_status()
+        features = resp.json().get("features") or []
+        if not features:
+            continue
+        if len(features) == 1 or not hint_tokens:
+            return features[0].get("attributes")
+
+        def _overlap(feature):
+            addr = (feature.get("attributes", {}).get("FullPhysicalAddress") or "").lower()
+            return len(hint_tokens & set(re.findall(r"[a-z0-9]+", addr)))
+
+        return max(features, key=_overlap).get("attributes")
+    return None
 
 
 def search_assessment(session: requests.Session, county_code, map_=None, parcel=None,
@@ -204,5 +230,9 @@ def get_assessment_detail(session: requests.Session, root_pid: str):
         "owner": labels.get("Owner(s)"),
         "comp_sqft": sqft,
         "total_appraisal": labels.get("Total Appraisal"),
+        # e.g. "R-Residential", "X-Exempt", "C-Commercial" -- used to flag a
+        # matched parcel that doesn't actually look like the home the auction
+        # was for (see enrich_sqft_wv.py's review_reason logic).
+        "property_class": labels.get("Property Class"),
         "source_url": f"{ASSESSMENT_DETAIL_URL}?PID={root_pid}",
     }
