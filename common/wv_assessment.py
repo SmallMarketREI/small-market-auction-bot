@@ -34,6 +34,18 @@ ARCGIS_PARCELS_URL = (
     "WV_Parcels/MapServer/0/query"
 )
 ASSESSMENT_SEARCH_URL = "https://mapwv.gov/assessment/Assessment.aspx"
+# Confirmed 2026-09-06 via live browser testing: mapwv.gov also runs this same
+# search off a plain GET query string (no ".aspx", capital-A "Assessment"),
+# e.g. mapwv.gov/assessment/Assessment?Counties=3&Map=21&Parcel=6 -- and
+# returns the identical results markup _parse_search_results already expects.
+# This replaced an earlier approach that POSTed a simulated copy of the
+# ASP.NET webforms search page (reading its viewstate, filling hidden fields,
+# etc.) -- that approach silently failed to match ANY real parcel in
+# production even when the county/map/parcel values were correct, while this
+# GET form matched every one of the same inputs when tested live. Simpler and
+# it actually works, so there's no reason to keep the old POST/viewstate path
+# around.
+ASSESSMENT_SEARCH_QUERY_URL = "https://mapwv.gov/assessment/Assessment"
 ASSESSMENT_DETAIL_URL = "https://mapwv.gov/Assessment/Detail/"
 
 # From the Assessment Search county dropdown (captured 2026-09-06). WV has 55
@@ -90,50 +102,23 @@ def lookup_parcel_by_latlng(session: requests.Session, lat: float, lng: float):
     return features[0].get("attributes")
 
 
-def _form_state(html: str):
-    """Extract every current input/select value from the search form so a POST
-    only has to override the fields we actually care about."""
-    soup = BeautifulSoup(html, "lxml")
-    form = soup.find("form")
-    state = {}
-    for el in form.find_all(["input", "select"]):
-        name = el.get("name")
-        if not name:
-            continue
-        if el.name == "select":
-            selected = el.find("option", selected=True) or el.find("option")
-            state[name] = selected.get("value", "") if selected else ""
-        elif el.get("type") in ("checkbox", "radio"):
-            if el.get("checked") is not None:
-                state[name] = el.get("value", "on")
-        else:
-            state[name] = el.get("value", "")
-    return state, soup
-
-
 def search_assessment(session: requests.Session, county_code, map_=None, parcel=None,
                        street_name=None):
-    """Search the WV Assessment database. Returns a list of result dicts, each
-    with the parsed grid columns plus 'root_pid' (the Detail-page id) when a
-    link could be found for that row."""
-    get_resp = session.get(ASSESSMENT_SEARCH_URL, timeout=20)
-    get_resp.raise_for_status()
-    state, _ = _form_state(get_resp.text)
-
-    state["ctl00$MainContent$ddlbCounties"] = str(county_code)
-    state["ctl00$MainContent$ddlbDistrict"] = "0"  # "All" -- Map+Parcel narrows enough
+    """Search the WV Assessment database via its GET-able query-string search
+    (see ASSESSMENT_SEARCH_QUERY_URL above). Returns a list of result dicts,
+    each with the parsed grid columns plus 'root_pid' (the Detail-page id)
+    when a link could be found for that row.
+    """
+    params = {"Counties": county_code}
     if map_:
-        state["ctl00$MainContent$txtMap"] = map_
+        params["Map"] = map_
     if parcel:
-        state["ctl00$MainContent$txtParcel"] = parcel
+        params["Parcel"] = parcel
     if street_name:
-        state["ctl00$MainContent$txtStreetName"] = street_name
-    state["__EVENTTARGET"] = ""
-    state["__EVENTARGUMENT"] = ""
-
-    post_resp = session.post(ASSESSMENT_SEARCH_URL, data=state, timeout=20)
-    post_resp.raise_for_status()
-    return _parse_search_results(post_resp.text)
+        params["StreetName"] = street_name
+    resp = session.get(ASSESSMENT_SEARCH_QUERY_URL, params=params, timeout=20)
+    resp.raise_for_status()
+    return _parse_search_results(resp.text)
 
 
 def _parse_search_results(html: str):
