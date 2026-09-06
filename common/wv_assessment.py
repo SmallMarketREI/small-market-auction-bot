@@ -53,6 +53,12 @@ COUNTY_NAME_TO_CODE = {
     "Wyoming": 55,
 }
 
+# The reverse of the above. Confirmed necessary in production 2026-09: the
+# ArcGIS parcel layer's COUNTY attribute actually comes back as this same
+# numeric code (e.g. '40', '06'), not a spelled-out name -- so enrich_sqft_wv.py
+# needs to go both directions depending on what a given response shape hands it.
+COUNTY_CODE_TO_NAME = {code: name for name, code in COUNTY_NAME_TO_CODE.items()}
+
 
 def new_session() -> requests.Session:
     s = requests.Session()
