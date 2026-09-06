@@ -99,6 +99,30 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
         "scheduled_end_time,starts_at,timezone,location,company_id,published,online_only"
     )
 
+    def _extract_items(data):
+        """The feed endpoints don't return a flat list -- confirmed from a real
+        run's logged response bodies:
+          /api/feed/all      -> {"active": {"results": [...]}, "completed": {...}, ...}
+          /api/feed?indices= -> {"results": [...]}
+        Handle both shapes (flat "results"/"data"/"items", or one level nested
+        under a status key like "active") instead of assuming a top-level list
+        or a "data"/"items" key that this API doesn't actually use.
+        """
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return []
+        for key in ("results", "data", "items"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        collected = []
+        for value in data.values():
+            if isinstance(value, dict):
+                for key in ("results", "data", "items"):
+                    if isinstance(value.get(key), list):
+                        collected.extend(value[key])
+        return collected
+
     def _fetch(url, extra_params, label):
         found = []
         for page in range(1, max_pages + 1):
@@ -113,7 +137,8 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
             except ValueError:
                 print(f"[{label}] page {page}: response was not JSON, stopping")
                 break
-            items = data if isinstance(data, list) else data.get("data") or data.get("items") or []
+            items = _extract_items(data)
+            print(f"[{label}] page {page}: parsed {len(items)} item(s)")
             if not items:
                 break
             for item in items:
