@@ -1,8 +1,13 @@
 name: Daily auction data update
 
+# Runs 3x/day (9am / 1pm / 6pm ET) so new sold results and square footage
+# enrichment stay current without waiting a full day -- cheap to do since
+# GitHub Actions is unlimited on a public repo. Times are in UTC and don't
+# shift with US daylight saving, so actual ET local time drifts by an hour
+# for part of the year; not worth the complexity of correcting for that.
 on:
   schedule:
-    - cron: "0 13 * * *"
+    - cron: "0 13,17,22 * * *"
   workflow_dispatch: {}
 
 jobs:
