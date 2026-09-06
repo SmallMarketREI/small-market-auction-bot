@@ -49,12 +49,12 @@ def candidates():
 
 def resolve_one(session, row):
     lat, lng = row.get("lat"), row.get("lng")
-    county_name = map_ = parcel = None
+    raw_county = map_ = parcel = None
 
     if lat and lng:
         arcgis = wv_assessment.lookup_parcel_by_latlng(session, lat, lng)
         if arcgis:
-            county_name = arcgis.get("COUNTY")
+            raw_county = arcgis.get("COUNTY")
             map_ = arcgis.get("Map") or row.get("tax_map")
             parcel = arcgis.get("Parcel") or row.get("tax_parcel")
 
@@ -63,15 +63,28 @@ def resolve_one(session, row):
     if not parcel:
         parcel = row.get("tax_parcel")
 
-    if not county_name:
+    if not raw_county:
         # No spatial match (or no lat/lng at all) -- without a county we can't
         # search the assessment database. A future improvement: maintain a
         # WV city -> county lookup table as a fallback here.
         return None, "no county resolved (missing/failed lat-lng parcel lookup)"
 
-    county_code = wv_assessment.COUNTY_NAME_TO_CODE.get(county_name.strip().title())
+    # Confirmed in production 2026-09: the ArcGIS parcel layer's COUNTY field
+    # actually comes back as WV's numeric county code (e.g. '40', '06'), not a
+    # spelled-out name -- the earlier "unrecognized county name" errors were
+    # this client trying to look up '40' as if it were a county name. Handle
+    # both shapes so this keeps working if a future ArcGIS response ever does
+    # send a name instead.
+    raw_county_str = str(raw_county).strip()
+    if raw_county_str.isdigit():
+        county_code = int(raw_county_str)
+        county_name = wv_assessment.COUNTY_CODE_TO_NAME.get(county_code, raw_county_str)
+    else:
+        county_name = raw_county_str.title()
+        county_code = wv_assessment.COUNTY_NAME_TO_CODE.get(county_name)
+
     if not county_code:
-        return None, f"unrecognized county name from ArcGIS: {county_name!r}"
+        return None, f"unrecognized county from ArcGIS: {raw_county!r}"
 
     if not (map_ and parcel):
         return None, "no tax map/parcel available to search with"
