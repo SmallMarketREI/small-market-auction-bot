@@ -81,37 +81,57 @@ def list_result_page_auction_ids(session: requests.Session, max_pages: int = 40,
 
 
 def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_page: int = 50):
-    """Page through bid.joerpyleauctions.com/api/feed/all for every currently
-    listed (active or upcoming) auction id."""
+    """Page through bid.joerpyleauctions.com's feed endpoint(s) for every
+    currently listed (active or upcoming) auction id.
+
+    There are two feed endpoints seen during recon:
+      /api/feed/all              -- looked like a general/global listing
+      /api/feed?active=true&indices=20  -- 'indices=20' matches Joe R. Pyle's
+                                            own company_id (20), seen on every
+                                            auction detail response -- likely
+                                            the properly site-scoped feed.
+    We try /api/feed/all first (simpler params) and fall back to the
+    indices=20 form if that comes back empty, logging enough detail either way
+    to diagnose from the Action's log output if both come back empty.
+    """
     fields = (
         "type,id,items_count,published_items_count,name,status,"
         "scheduled_end_time,starts_at,timezone,location,company_id,published,online_only"
     )
-    ids = []
-    for page in range(1, max_pages + 1):
-        resp = session.get(
-            f"{BID_BASE}/api/feed/all",
-            params={
-                "fields": fields,
-                "page": page,
-                "per_page": per_page,
-                "include_syndicated": "true",
-                "version": 2,
-            },
-            timeout=20,
+
+    def _fetch(url, extra_params, label):
+        found = []
+        for page in range(1, max_pages + 1):
+            params = {"fields": fields, "page": page, "per_page": per_page}
+            params.update(extra_params)
+            resp = session.get(url, params=params, timeout=20)
+            print(f"[{label}] page {page}: HTTP {resp.status_code}, body starts: {resp.text[:300]!r}")
+            if resp.status_code != 200:
+                break
+            try:
+                data = resp.json()
+            except ValueError:
+                print(f"[{label}] page {page}: response was not JSON, stopping")
+                break
+            items = data if isinstance(data, list) else data.get("data") or data.get("items") or []
+            if not items:
+                break
+            for item in items:
+                if item.get("id"):
+                    found.append(item["id"])
+            if len(items) < per_page:
+                break
+            time.sleep(config.REQUEST_DELAY_SECONDS)
+        return found
+
+    ids = _fetch(f"{BID_BASE}/api/feed/all", {"include_syndicated": "true", "version": 2}, "feed/all")
+    if not ids:
+        print("[feed] /api/feed/all returned nothing -- trying the company-scoped /api/feed endpoint")
+        ids = _fetch(
+            f"{BID_BASE}/api/feed",
+            {"active": "true", "include_recently_complete_auctions_to_active": "false", "indices": 20},
+            "feed?indices=20",
         )
-        if resp.status_code != 200:
-            break
-        data = resp.json()
-        items = data if isinstance(data, list) else data.get("data") or data.get("items") or []
-        if not items:
-            break
-        for item in items:
-            if item.get("id"):
-                ids.append(item["id"])
-        if len(items) < per_page:
-            break
-        time.sleep(config.REQUEST_DELAY_SECONDS)
     return ids
 
 
