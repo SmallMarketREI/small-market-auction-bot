@@ -1,0 +1,41 @@
+name: Daily auction data update
+
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SCRAPER_CONTACT_EMAIL: ${{ secrets.SCRAPER_CONTACT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scrape past sales
+        id: past_sales
+        run: python scrape_past_sales.py
+
+      - name: Scrape watch/live bids
+        id: watch_bids
+        run: python scrape_watch_bids.py
+
+      - name: Enrich square footage from WV Assessment
+        id: sqft_enrichment
+        run: python enrich_sqft_wv.py
+
+      - name: Fail the run if a scraping step broke
+        if: steps.past_sales.outcome == 'failure' || steps.watch_bids.outcome == 'failure'
+        run: |
+          echo "One or more scrapers failed -- check the step logs above."
+          exit 1
