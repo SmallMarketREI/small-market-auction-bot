@@ -59,6 +59,35 @@ def upsert(table: str, rows: list, on_conflict: str, retries: int = 3) -> dict:
     raise RuntimeError(f"Supabase upsert to {table} failed after {retries} attempts: {last_err}")
 
 
+def delete_not_in(table: str, column: str, keep_values: list) -> dict:
+    """Delete every row in `table` whose `column` is NOT one of `keep_values`.
+
+    Used to keep watch_auctions an exact mirror of "what's active right now"
+    -- an auction that sold, got cancelled, or fell out of the live feed
+    should disappear from Watch instead of lingering forever (which is how a
+    scoping/parsing bug elsewhere can quietly leave hundreds of stale rows
+    sitting in the table even after it's fixed).
+
+    Refuses to run when `keep_values` is empty, rather than wiping the whole
+    table -- a scrape that legitimately found zero rows is exactly the
+    scenario we should NOT trust enough to delete everything on.
+    """
+    config.require_supabase_config()
+    if not keep_values:
+        print(f"[warn] delete_not_in({table}): keep_values is empty, skipping to avoid wiping the table")
+        return {"skipped": True}
+    url = f"{config.SUPABASE_URL}/rest/v1/{table}"
+    resp = requests.delete(
+        url,
+        headers=_headers(prefer="return=minimal"),
+        params={column: f"not.in.({','.join(keep_values)})"},
+        timeout=30,
+    )
+    if resp.status_code not in (200, 204):
+        raise RuntimeError(f"Supabase delete_not_in on {table} failed: {resp.status_code}: {resp.text[:500]}")
+    return {"skipped": False}
+
+
 def select(table: str, params: dict = None) -> list:
     """Simple SELECT via PostgREST. `params` are passed straight through as query
     params, e.g. {"comp_sqft": "is.null", "select": "id,city,tax_map,tax_parcel"}.
