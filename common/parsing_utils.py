@@ -1,5 +1,46 @@
 import re
 
+# Keyword-based property type guess, used because Pyle's real-estate auctions
+# aren't all houses (the historical data includes Land, Commercial, Mobile
+# Home, and similar) -- hardcoding "House" for everything breaks "same
+# property type" comp matching for anything that isn't. Checked in this order
+# (most specific first) against the auction's own title + description.
+_MOBILE_HOME_KEYWORDS = (
+    "mobile home", "manufactured home", "singlewide", "single wide", "doublewide", "double wide",
+)
+_COMMERCIAL_KEYWORDS = (
+    "commercial", "retail space", "office building", "warehouse", "storefront",
+    "restaurant building", "gas station", "auto shop", "church building", "industrial",
+)
+_HOUSE_KEYWORDS = (
+    "bedroom", "bathroom", "single family", "ranch home", "cape cod", "colonial",
+    "duplex", "townhouse", "condo",
+)
+_LAND_KEYWORDS = (
+    "vacant land", "vacant lot", "building lot", "buildable lot", "wooded lot", "acreage",
+    "tract of land", "unimproved lot",
+)
+
+
+def guess_property_type(name: str, description: str) -> str:
+    """Best-effort property type from an auction's title + description text.
+    Defaults to "House" when nothing distinctive is found, since that's still
+    the overwhelming majority of what this auctioneer lists -- matches the
+    prior hardcoded behavior for the common case, while actually detecting
+    the exceptions instead of mislabeling them."""
+    text = f"{name or ''} {description or ''}".lower()
+    if any(k in text for k in _MOBILE_HOME_KEYWORDS):
+        return "Mobile Home"
+    if any(k in text for k in _COMMERCIAL_KEYWORDS):
+        return "Commercial"
+    if any(k in text for k in _HOUSE_KEYWORDS):
+        return "House"
+    if re.search(r"\b\d\s*(bed|br)\b", text):
+        return "House"
+    if any(k in text for k in _LAND_KEYWORDS):
+        return "Land"
+    return "House"
+
 
 def parse_sqft_from_text(text: str):
     """Pull a stated square footage out of an auction description, e.g.
