@@ -33,6 +33,16 @@ def upsert(table: str, rows: list, on_conflict: str, retries: int = 3) -> dict:
     if not rows:
         return {"inserted_or_updated": 0}
 
+    # PostgREST rejects a batch where rows don't all share the exact same set
+    # of keys (PGRST102). Normalize here so a caller that only sets a field
+    # conditionally (e.g. "if stated_sqft: row['comp_sqft'] = ...") can't
+    # break the whole batch -- every row gets every key seen anywhere in the
+    # batch, filled with None where it was missing.
+    all_keys = set()
+    for row in rows:
+        all_keys.update(row.keys())
+    rows = [{k: row.get(k) for k in all_keys} for row in rows]
+
     url = f"{config.SUPABASE_URL}/rest/v1/{table}?on_conflict={on_conflict}"
     last_err = None
     for attempt in range(retries):
