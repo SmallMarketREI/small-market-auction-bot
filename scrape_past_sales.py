@@ -27,8 +27,7 @@ def build_past_row(detail: dict) -> dict:
         "city": s["city"],
         "state": s["state"],
         "zip": s["zip"],
-        "property_type": "House",  # Pyle's real-estate listings are ~all houses/land; refine if a
-                                    # listing's description clearly says otherwise.
+        "property_type": parsing_utils.guess_property_type(s["name"], s["description"]),
         "published_final_sold_price": s["current_high_bid"],
         "status": "Sold",
         "title_notes": s["name"],
