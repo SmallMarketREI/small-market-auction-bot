@@ -43,7 +43,7 @@ def build_watch_row(detail: dict, now_utc: datetime.datetime) -> dict:
         "state": s["state"],
         "zip": s["zip"],
         "title": s["name"],
-        "property_type": "House",
+        "property_type": parsing_utils.guess_property_type(s["name"], s["description"]),
         "status": "Closing" if closing_soon else "Upcoming",
         "current_high_bid": s["current_high_bid"],
         "current_bid_with_premium": with_premium,
@@ -114,4 +114,11 @@ def run():
 
 if __name__ == "__main__":
     outcome = run()
-    sys.exit(1 if outcome["ids_found"] == 0 else 0)
+    # Zero active auctions is a normal, unremarkable state for a small
+    # regional auctioneer between listings -- it is NOT evidence the scraper
+    # is broken (a real breakage, e.g. the feed endpoint itself failing,
+    # already raises inside run() and fails this job on its own). Treating a
+    # quiet day as a failure just trains everyone to ignore red X's, which
+    # matters more now that this same script also runs unattended every few
+    # hours via refresh-watch-bids.yml.
+    sys.exit(0)
