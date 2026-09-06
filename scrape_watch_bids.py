@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Daily job: pull every currently active/upcoming auction from BidWrangler's
-own feed (bid.joerpyleauctions.com/api/feed/all) and upsert current bid state
-into watch_auctions. This is the live-bid tracking the prototype's Watch tab
-did by hand -- now a straight JSON API call, no headless browser required.
+"""Daily job: pull every currently active/upcoming Joe R. Pyle auction from
+BidWrangler's company-scoped feed and upsert current bid state into
+watch_auctions. This is the live-bid tracking the prototype's Watch tab did
+by hand -- now a straight JSON API call, no headless browser required.
 """
+import datetime
 import sys
 
 from common import bidwrangler, parsing_utils, supabase_client
 
 
-def build_watch_row(detail: dict) -> dict:
+def build_watch_row(detail: dict, now_utc: datetime.datetime) -> dict:
     s = bidwrangler.summarize_auction(detail)
     district, map_, parcel = parsing_utils.parse_tax_reference(s["description"])
 
@@ -19,6 +20,19 @@ def build_watch_row(detail: dict) -> dict:
     with_premium = None
     if s["current_high_bid"] is not None:
         with_premium = round(s["current_high_bid"] * (1 + premium_rate), 2)
+
+    # "Closing" vs "Upcoming" is about how soon bidding ends, not whether the
+    # auction is done -- rows that are actually complete/archived never reach
+    # this function at all (see run(), below), so both labels here always mean
+    # "still open."
+    closing_soon = False
+    end_time_raw = s["scheduled_end_time"]
+    if end_time_raw:
+        try:
+            end_dt = datetime.datetime.fromisoformat(end_time_raw.replace("Z", "+00:00"))
+            closing_soon = (end_dt - now_utc) <= datetime.timedelta(hours=72)
+        except ValueError:
+            pass
 
     return {
         "bidwrangler_id": s["bidwrangler_id"],
@@ -30,7 +44,7 @@ def build_watch_row(detail: dict) -> dict:
         "zip": s["zip"],
         "title": s["name"],
         "property_type": "House",
-        "status": "Upcoming" if s["status"] not in ("complete", "closed") else "Closing",
+        "status": "Closing" if closing_soon else "Upcoming",
         "current_high_bid": s["current_high_bid"],
         "current_bid_with_premium": with_premium,
         "reserve_amount": s["reserve_amount"],
@@ -46,31 +60,47 @@ def build_watch_row(detail: dict) -> dict:
 
 
 def run():
-    import datetime
-
     session = bidwrangler.new_session()
     bidwrangler.warm_session(session)
 
     ids = bidwrangler.list_feed_auction_ids(session)
     print(f"Found {len(ids)} active/upcoming auction ids from the BidWrangler feed")
 
-    checked_at = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    checked_at = now_utc.strftime("%Y-%m-%d %H:%M UTC")
     rows = []
+    skipped_sold = 0
     errors = []
     for auction_id in ids:
         try:
             detail = bidwrangler.get_auction_detail(session, auction_id)
-            row = build_watch_row(detail)
-            row["bid_last_checked"] = checked_at
-            rows.append(row)
         except Exception as e:  # noqa: BLE001
             errors.append(f"auction {auction_id}: {e}")
+            continue
 
-    print(f"{len(rows)} watch rows to upsert, {len(errors)} lookups failed")
+        # The feed can include auctions that have already ended (BidWrangler's
+        # "active" grouping isn't the same as "still accepting bids") -- those
+        # belong in past_auctions, not Watch, so skip them here the same way
+        # scrape_past_sales.py decides is_sold.
+        status = (detail.get("status") or "").lower()
+        is_sold = detail.get("complete") or detail.get("archived") or status in ("complete", "closed")
+        if is_sold:
+            skipped_sold += 1
+            continue
+
+        row = build_watch_row(detail, now_utc)
+        row["bid_last_checked"] = checked_at
+        rows.append(row)
+
+    print(f"{len(rows)} watch rows to upsert ({skipped_sold} already-closed skipped), {len(errors)} lookups failed")
 
     result = {"inserted_or_updated": 0}
     if rows:
         result = supabase_client.upsert("watch_auctions", rows, on_conflict="source_url")
+        # Keep watch_auctions an exact mirror of "what's active right now" --
+        # anything that fell out of the feed (sold, cancelled, or just no
+        # longer listed) should disappear from Watch instead of lingering.
+        supabase_client.delete_not_in("watch_auctions", "source_url", [r["source_url"] for r in rows])
 
     supabase_client.log_run(
         "watch_bids",
