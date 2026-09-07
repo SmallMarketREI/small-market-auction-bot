@@ -81,6 +81,135 @@ def parse_tax_reference(text: str):
     return district, map_, parcel
 
 
+def parse_acreage_from_text(text: str):
+    """Pull a stated acreage out of listing text, e.g. '3.27+/- Acre Lot' or
+    '58.93 +/- Acre'. Returns a float or None. Vacant land parcels (common in
+    Pyle's multi-parcel auctions) usually have this instead of a usable
+    square footage, so the dashboard can fall back to a $/acre figure."""
+    if not text:
+        return None
+    m = re.search(r"([\d,]{1,6}\.?\d*)\s*\+?/?-?\s*acres?\b", text, re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
+_SUBJECT_PREFIX_RE = re.compile(
+    # The parcel number itself is never parsed into anything (parcel_key
+    # comes from the item's raw position in the auction, not this text), so
+    # rather than spelling out every number word, this just accepts a short
+    # alphanumeric token after "Subject" -- confirmed necessary live: a
+    # 16-parcel auction used "Subject Eleven:" through "Subject Seventeen:",
+    # which an earlier one/two/.../ten word-list silently failed to match
+    # and dropped those parcels from every downstream table entirely.
+    r"^subject\s*#?\s*[a-z0-9]{1,12}\s*:\s*",
+    re.IGNORECASE,
+)
+# Matches "<street/area>, <city>, ST [ZIP]" allowing a comma, hyphen, or en/em
+# dash as the street/city separator, since Pyle's own listings use all three
+# inconsistently (observed live: "Big Ugly Rd E, Harts, WV 25524",
+# "261 Ronda Road - Dry Branch, WV 25061", "Bufflick Run- Clendenin, WV").
+_TRAILING_CITY_STATE_ZIP_RE = re.compile(
+    r"^(?P<street>.*?)[,\-–—]\s*(?P<city>[A-Za-z .]+?),?\s*"
+    r"(?P<state>WV|PA|OH|KY|VA|MD)\b\s*(?P<zip>\d{4,5})?\s*$"
+)
+# Fallback for when the address is buried in the item's DESCRIPTION rather
+# than its name (observed live: item name "Subject #4: Stone Commercial
+# Building on 0.4+/- Acres", with "288 E Grafton Rd Fairmont, WV" only
+# appearing in the description text) -- requires a leading street number so
+# it doesn't false-match on acreage/sqft figures elsewhere in the text.
+_DESC_ADDRESS_RE = re.compile(
+    r"(?P<street>\d{1,6}\s+[A-Za-z0-9'.# ]+)\s+(?P<city>[A-Za-z .]+?),\s*"
+    r"(?P<state>WV|PA|OH|KY|VA|MD)\b\s*(?P<zip>\d{4,5})?"
+)
+_BUNDLE_NAME_RE = re.compile(r"propert(?:y|ies)\s+in\s+entiret", re.IGNORECASE)
+_MINERAL_NAME_RE = re.compile(r"mineral\s+interests?", re.IGNORECASE)
+
+
+def is_subject_item_name(name: str) -> bool:
+    """True for a BidWrangler item name following Pyle's 'Subject N:' /
+    'Subject #N:' convention, used only on multi-parcel real-estate
+    auctions -- never observed on a personal-property multi-lot auction
+    (those use names like 'Preview Information', '2003 Freightliner...')."""
+    return bool(name and _SUBJECT_PREFIX_RE.match(name.strip()))
+
+
+def is_bundle_item_name(name: str) -> bool:
+    """True for a multi-parcel auction's 'buy it all as one lot' option (e.g.
+    'Subject #5: Property in Entirety') -- not an individual parcel."""
+    return bool(name and _BUNDLE_NAME_RE.search(name))
+
+
+def is_mineral_interest_item_name(name: str) -> bool:
+    """True for a mineral-rights-only line item (e.g. 'Subject #6: Mineral
+    Interests') -- not a comparable piece of real estate, so it's excluded
+    from past_auctions/watch_auctions entirely rather than mis-comped."""
+    return bool(name and _MINERAL_NAME_RE.search(name))
+
+
+def parse_subject_address(item_name: str, item_description: str = None):
+    """Best-effort address/city/state/zip for one parcel in a multi-parcel
+    auction (a BidWrangler item named like 'Subject Two: 261 Ronda Road -
+    Dry Branch, WV 25061'). Returns a dict:
+        {"address": str, "city": str|None, "state": str|None, "zip": str|None,
+         "confident": bool}
+    "address" always has something usable (falls back to the raw item name
+    with the "Subject N:" prefix stripped) so a row is never silently
+    dropped -- but confident=False means the city/state/zip split is
+    unverified and the caller should flag the row for review instead of
+    trusting it blindly, per "Needs Review instead of guessing."
+    """
+    raw = (item_name or "").strip()
+    stripped = _SUBJECT_PREFIX_RE.sub("", raw).strip()
+
+    m = _TRAILING_CITY_STATE_ZIP_RE.match(stripped)
+    if m:
+        street = m.group("street").strip()
+        city = m.group("city").strip()
+        # A run-on name with no real street/city separator (observed live:
+        # "1323 Adams Avenue Clarksburg, WV", no dash/comma before the city)
+        # still matches here because the greedy \s* before the city group can
+        # backtrack and let the (space-permitting) city group swallow just
+        # the whitespace before the state code -- street then wrongly absorbs
+        # the actual city name and "city" comes back blank. Don't trust that
+        # split; fall through to the description fallback / not-confident
+        # case below instead of returning a confident empty city.
+        if street and city:
+            return {
+                "address": street,
+                "city": city,
+                "state": m.group("state"),
+                "zip": m.group("zip"),
+                "confident": True,
+            }
+
+    # Address wasn't in the name -- try the description (observed live: see
+    # _DESC_ADDRESS_RE docstring above).
+    m2 = _DESC_ADDRESS_RE.search(item_description or "")
+    if m2:
+        return {
+            "address": m2.group("street").strip(),
+            "city": m2.group("city").strip(),
+            "state": m2.group("state"),
+            "zip": m2.group("zip"),
+            "confident": True,
+        }
+
+    # Nothing parseable -- keep the raw (prefix-stripped) text as the best
+    # available label rather than dropping the row, but mark it unconfident
+    # so the caller flags it for review instead of comping on a guess.
+    return {
+        "address": stripped or raw or None,
+        "city": None,
+        "state": None,
+        "zip": None,
+        "confident": False,
+    }
+
+
 def to_float(value):
     if value is None:
         return None
