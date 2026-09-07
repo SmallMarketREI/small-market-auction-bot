@@ -1,26 +1,35 @@
 """Client for Joe R. Pyle Auctions' real backend.
-
+ 
 Recon findings (confirmed 2026-09-06 via browser network inspection -- see the
 plan/README for how this was found): both the public marketing site
 (joerpyleauctions.com) and the live bidding site (bid.joerpyleauctions.com) are
 powered by the "BidWrangler" auction platform. Every auction -- past (sold) and
 upcoming -- has a numeric BidWrangler id and a clean JSON detail endpoint:
-
+ 
     GET https://bid.joerpyleauctions.com/api/auctions/{id}
         ?page=active&include_items_data=true&include_documents=true
-
+ 
 No headless browser is needed anywhere in this pipeline -- plain HTTP suffices.
-
-Two ways to discover auction ids:
-  1. Static HTML on joerpyleauctions.com/results (and /results/P15, /P30, ...)
-     links to each auction as /auctions/detail/bw{id} -- this is the practical
-     source of PAST/SOLD auction ids (the marketing site is the durable public
-     archive; BidWrangler itself may not keep completed auctions in its own
-     feed indefinitely).
-  2. bid.joerpyleauctions.com/api/feed?indices={company_id} (paginated) lists
-     currently active/upcoming auctions for one company on the platform
-     directly -- the source for the Watch tab.
-
+ 
+Two ways to discover auction ids, both plain static HTML on the marketing
+site (joerpyleauctions.com), not BidWrangler's own API:
+  1. /results (and /results/P15, /P30, ...) links to each SOLD auction as
+     /auctions/detail/bw{id} -- the practical source of past/sold auction
+     ids. Confirmed 2026-09-07: this archive only goes back ~3.5 months
+     before its pagination hits a 404; there's no deeper public archive.
+  2. The homepage (ROOT_BASE) embeds every currently-listed auction id --
+     real estate and personal property mixed -- in a single page load; no
+     pagination needed (see list_upcoming_page_auction_ids). This replaced
+     bid.joerpyleauctions.com/api/feed?indices={company_id}, which was
+     confirmed in production to return a small, incomplete slice of Pyle's
+     actual live listings (as few as 1, when the site itself showed 79 real
+     estate auctions that same day) -- kept below only as a last-resort
+     fallback, not the primary source anymore.
+ 
+Every auction found either way still gets its full detail from BidWrangler's
+own JSON API (get_auction_detail) -- that part was always reliable; it's only
+the *discovery* of which ids to look up that needed a different source.
+ 
 Each auction's item description text also contains the county tax map
 reference the auctioneer includes in every listing, e.g.
 "District 19, Map 4G, Parcel 71" -- this feeds enrich_sqft_wv.py directly, no
@@ -28,14 +37,24 @@ address fuzzy-matching required.
 """
 import re
 import time
-
+ 
 import requests
-
+ 
 from . import config
-
+ 
 RESULTS_BASE = "https://www.joerpyleauctions.com/results"
+# The site's own homepage (confirmed 2026-09-07 via browser recon) embeds
+# EVERY currently-listed auction id -- real estate and personal property,
+# upcoming and some recently-closed -- in a single page load; its own P15/P30
+# "page 2/3" links re-render the exact same embedded set client-side rather
+# than fetching more, so one plain GET here is the complete discovery source
+# for "what's currently listed," no pagination needed. This replaced relying
+# on BidWrangler's own /api/feed endpoint, which was confirmed to only surface
+# a small, incomplete slice of Pyle's actual live listings (1 auction, when
+# the site itself was showing 79 real estate auctions that day).
+ROOT_BASE = "https://www.joerpyleauctions.com"
 BID_BASE = "https://bid.joerpyleauctions.com"
-
+ 
 # BidWrangler is a shared platform -- confirmed in production 2026-09 that
 # /api/feed/all is a platform-WIDE feed covering every auction company hosted
 # on BidWrangler, not just Joe R Pyle's (it returned things like a Uniontown,
@@ -43,16 +62,16 @@ BID_BASE = "https://bid.joerpyleauctions.com"
 # Every Pyle auction detail response carries this same company_id, and
 # /api/feed?indices=<company_id> is the properly scoped, Pyle-only feed.
 PYLE_COMPANY_ID = 20
-
+ 
 _AUCTION_LINK_RE = re.compile(r"/auctions/detail/bw(\d+)")
-
-
+ 
+ 
 def new_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": config.USER_AGENT, "Accept": "application/json, text/html"})
     return s
-
-
+ 
+ 
 def warm_session(session: requests.Session):
     """Hit the bidding site once so it can set whatever guest/session cookie it
     wants before we call the JSON API. Cheap insurance against the API someday
@@ -61,19 +80,30 @@ def warm_session(session: requests.Session):
         session.get(BID_BASE + "/", timeout=20)
     except requests.RequestException as e:
         print(f"[warn] could not warm session against {BID_BASE}: {e}")
-
-
-def list_result_page_auction_ids(session: requests.Session, max_pages: int = 40, page_size: int = 15):
-    """Walk joerpyleauctions.com/results, /results/P15, /results/P30, ...
-    collecting every distinct BidWrangler auction id linked from the page.
-    Stops after `max_pages` pages or as soon as a page contributes zero ids
-    that we haven't already seen (the site repeats/pads the tail page).
+ 
+ 
+def list_result_page_auction_ids(session: requests.Session, max_pages: int = 40, page_size: int = 15,
+                                  base_url: str = RESULTS_BASE):
+    """Walk `base_url`, `base_url`/P15, `base_url`/P30, ... collecting every
+    distinct BidWrangler auction id linked from the page. Stops after
+    `max_pages` pages or as soon as a page contributes zero ids we haven't
+    already seen (the site repeats/pads the tail page -- and, for the
+    homepage specifically, every "page" is really the same embedded set
+    re-rendered client-side, so this naturally stops after page 1 there).
+ 
+    Confirmed 2026-09-07: joerpyleauctions.com/results only exposes roughly
+    the last 3.5 months of sold auctions before its pagination hits a 404 --
+    there is no deeper archive discoverable this way (no sitemap of individual
+    auction pages either, and BidWrangler's own auction ids are too sparse to
+    brute-force scan for older ones without hammering a shared platform for
+    auctions that mostly aren't even Pyle's). `max_pages` above that point is
+    harmless -- the loop just stops itself once a page adds nothing new.
     """
     seen_ids = []
     seen_set = set()
     offset = 0
     for _ in range(max_pages):
-        url = RESULTS_BASE if offset == 0 else f"{RESULTS_BASE}/P{offset}"
+        url = base_url if offset == 0 else f"{base_url}/P{offset}"
         resp = session.get(url, timeout=20)
         if resp.status_code != 200:
             break
@@ -87,12 +117,20 @@ def list_result_page_auction_ids(session: requests.Session, max_pages: int = 40,
         offset += page_size
         time.sleep(config.REQUEST_DELAY_SECONDS)
     return seen_ids
-
-
+ 
+ 
+def list_upcoming_page_auction_ids(session: requests.Session, max_pages: int = 5, page_size: int = 15):
+    """Discovery source for 'everything currently listed' (real estate AND
+    personal property, mixed) -- see ROOT_BASE above. Real-estate filtering
+    happens later, per auction, via is_real_estate_auction() once we have
+    each one's own detail (items_count + description), not here."""
+    return list_result_page_auction_ids(session, max_pages=max_pages, page_size=page_size, base_url=ROOT_BASE)
+ 
+ 
 def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_page: int = 50):
     """Page through bid.joerpyleauctions.com's feed endpoint(s) for every
     currently listed (active or upcoming) Joe R. Pyle auction id.
-
+ 
     There are two feed endpoints seen during recon:
       /api/feed?active=true&indices=20  -- scoped to Pyle's own company_id
                                             (20, confirmed on every auction
@@ -115,7 +153,7 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
         "type,id,items_count,published_items_count,name,status,"
         "scheduled_end_time,starts_at,timezone,location,company_id,published,online_only"
     )
-
+ 
     def _extract_items(data):
         """The feed endpoints don't return a flat list -- confirmed from a real
         run's logged response bodies:
@@ -139,7 +177,7 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
                     if isinstance(value.get(key), list):
                         collected.extend(value[key])
         return collected
-
+ 
     def _fetch_items(url, extra_params, label):
         found = []
         for page in range(1, max_pages + 1):
@@ -163,14 +201,14 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
                 break
             time.sleep(config.REQUEST_DELAY_SECONDS)
         return found
-
+ 
     scoped_items = _fetch_items(
         f"{BID_BASE}/api/feed",
         {"active": "true", "include_recently_complete_auctions_to_active": "false", "indices": PYLE_COMPANY_ID},
         "feed?indices=20",
     )
     ids = [item["id"] for item in scoped_items if item.get("id")]
-
+ 
     if not ids:
         print("[feed] company-scoped feed returned nothing -- falling back to the "
               "platform-wide feed, filtered to Joe R. Pyle's company_id")
@@ -178,11 +216,14 @@ def list_feed_auction_ids(session: requests.Session, max_pages: int = 20, per_pa
         ids = [item["id"] for item in all_items if item.get("id") and item.get("company_id") == PYLE_COMPANY_ID]
         print(f"[feed] platform-wide feed had {len(all_items)} total item(s); "
               f"{len(ids)} belong to company_id={PYLE_COMPANY_ID}")
-
+ 
     return ids
-
-
+ 
+ 
 def get_auction_detail(session: requests.Session, auction_id) -> dict:
+    """Raises requests.HTTPError (404) if the id doesn't exist / isn't
+    reachable -- callers that need to distinguish "gone" from other failures
+    should catch that specifically."""
     resp = session.get(
         f"{BID_BASE}/api/auctions/{auction_id}",
         params={"page": "active", "include_items_data": "true", "include_documents": "true"},
@@ -190,8 +231,67 @@ def get_auction_detail(session: requests.Session, auction_id) -> dict:
     )
     resp.raise_for_status()
     return resp.json()
-
-
+ 
+ 
+def is_real_estate_auction(detail: dict, summarized: dict) -> bool:
+    """Confirmed 2026-09-07 via recon across ~120 currently-listed Pyle
+    auctions: every real-estate auction is single-lot (items_count == 1) and
+    its item description contains the phrase "real estate" (from the
+    auctioneer's own "ONLINE REAL ESTATE AUCTION" / "Real Estate Auction"
+    boilerplate); every personal-property auction on this account is
+    multi-lot (dozens to hundreds of items) and its first item's description
+    is just a preview-time blurb, not that phrase. Both signals together
+    avoid misclassifying a rare single-lot personal-property listing (e.g. a
+    single vehicle) as real estate."""
+    if detail.get("items_count") != 1:
+        return False
+    return "real estate" in (summarized.get("description") or "").lower()
+ 
+ 
+def build_past_auction_row(s: dict, tax_ref: tuple, stated_sqft) -> dict:
+    """Shared field-mapping for a SOLD real-estate auction -> a past_auctions
+    row. Used by both scrape_past_sales.py (discovers sold auctions via the
+    site's /results archive) and scrape_watch_bids.py (also writes here
+    directly the moment it sees an auction it was tracking flip to sold, so a
+    sale doesn't have to wait for /results to catch up) so the two paths
+    can't drift into different field mappings over time."""
+    district, map_, parcel = tax_ref
+    row = {
+        "bidwrangler_id": s["bidwrangler_id"],
+        "auction_date": (s["scheduled_end_time"] or "")[:10] or None,
+        "address": s["address"],
+        "city": s["city"],
+        "state": s["state"],
+        "zip": s["zip"],
+        "property_type": None,  # filled in by the caller via parsing_utils.guess_property_type
+        "published_final_sold_price": s["current_high_bid"],
+        "status": "Sold",
+        "title_notes": s["name"],
+        "source_url": s["detail_url"],
+        "tax_district": district,
+        "tax_map": map_,
+        "tax_parcel": parcel,
+        "lat": s["lat"],
+        "lng": s["lng"],
+        "auction_company": "joe_pyle_auctions",
+        "comp_sqft": None,
+        "comp_sqft_source": None,
+        "comp_sqft_source_url": None,
+        "comp_sqft_quality": None,
+        "comp_sqft_note": None,
+    }
+    if stated_sqft:
+        row["comp_sqft"] = stated_sqft
+        row["comp_sqft_source"] = "Auction listing (auctioneer-stated)"
+        row["comp_sqft_source_url"] = s["marketing_url"]
+        row["comp_sqft_quality"] = "Unverified -- from listing copy, not the county record"
+        row["comp_sqft_note"] = (
+            f"Auctioneer's listing states {stated_sqft:g} sq ft. Run enrich_sqft_wv.py to "
+            "confirm/replace with the official WV Assessment figure."
+        )
+    return row
+ 
+ 
 def summarize_auction(detail: dict) -> dict:
     """Normalize a raw /api/auctions/{id} response down to the fields the
     scrapers need. Assumes single-lot real-estate auctions (items_count == 1),
@@ -205,13 +305,21 @@ def summarize_auction(detail: dict) -> dict:
     high = bidding_state.get("high") or {}
     bidding_config = item.get("bidding_configuration") or {}
     description = item.get("description_without_html") or ""
-
+ 
     return {
         "bidwrangler_id": detail.get("id"),
         "name": detail.get("name") or item.get("name"),
         "status": detail.get("status"),
         "complete": detail.get("complete"),
         "archived": detail.get("archived"),
+        "items_count": detail.get("items_count"),
+        # The single item's own status -- "sold" / "no_sale" are the two
+        # values confirmed in production for single-lot real-estate auctions.
+        # This is the definitive sold-vs-unsold signal (see
+        # is_real_estate_auction's docstring for how this was found):
+        # BidWrangler tracks it directly, no guessing from price/bid data
+        # needed.
+        "item_status": item.get("status"),
         "scheduled_end_time": item.get("scheduled_end_time") or detail.get("scheduled_end_time"),
         "address": location.get("street"),
         "city": location.get("city"),
