@@ -174,6 +174,76 @@ def _parse_search_results(html: str):
     return results
 
 
+def _parse_float(value):
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def select_best_match(results, parcel=None, district=None, acreage=None):
+    """When a Map+Parcel search returns more than one row, pick the one that
+    actually matches -- instead of blindly taking the first, which is what
+    every caller used to do.
+
+    This matters because the search is a substring/prefix match, not exact:
+    confirmed live 2026-09-07 that county=24 (Marion) map=24 parcel=33
+    returns 13 distinct properties -- every "33.0" through "33.10"
+    sub-parcel -- spanning 3 different districts, from a 27-acre farm tract
+    with no structure to an unrelated $426,900 house two sub-parcels over.
+    An auctioneer listing that states a bare "Parcel 33" (no decimal) means
+    the root sub-parcel "33.0", but the site's own result order isn't
+    ranked by that at all, so results[0] can land on any sibling.
+
+    Scoring, most specific first:
+      1. Exact numeric Parcel match (so a bare "33" prefers "33.0" over
+         "33.5") -- by far the strongest signal, since it directly encodes
+         which of the sub-parcels this is.
+      2. Same District (raw map/parcel numbers repeat across districts --
+         confirmed live: three separate "33.0" parcels in three districts).
+      3. Closest Deeded Acres to the auction listing's own stated acreage,
+         when both are available -- distinguishes siblings that share both
+         parcel number and district.
+    Falls back to the first result when nothing scores higher than anything
+    else, matching the old behavior for the common single-result case.
+    """
+    if not results:
+        return None
+    if len(results) == 1:
+        return results[0]
+
+    target_parcel = _parse_float(parcel)
+    target_district = None
+    if district is not None:
+        m = re.search(r"\d+", str(district))
+        if m:
+            target_district = int(m.group())
+    target_acreage = _parse_float(acreage)
+
+    def _score(r):
+        score = 0
+        r_parcel = _parse_float(r.get("Parcel"))
+        if target_parcel is not None and r_parcel is not None and abs(r_parcel - target_parcel) < 0.001:
+            score += 100
+        if target_district is not None:
+            dm = re.search(r"\d+", str(r.get("District") or ""))
+            if dm and int(dm.group()) == target_district:
+                score += 10
+        if target_acreage is not None:
+            r_acres = _parse_float(r.get("Deeded Acres"))
+            if r_acres is not None:
+                diff = abs(r_acres - target_acreage)
+                if diff < 0.05:
+                    score += 5
+                elif target_acreage and diff < target_acreage * 0.05 + 0.05:
+                    score += 2
+        return score
+
+    return max(results, key=_score)
+
+
 def get_assessment_detail(session: requests.Session, root_pid: str):
     """Fetch mapwv.gov/Assessment/Detail/?PID=... and pull out the fields we
     care about. Returns a dict; comp_sqft is None if not found on the page."""
