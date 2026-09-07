@@ -205,16 +205,16 @@ def test_resolve_one_lifecycle():
     try:
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc)
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
         assert outcome == "active" and payload["final_status"] == "Active", (outcome, payload)
 
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 160625, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 160625, "2026-09-07 12:00 UTC", now)
         assert outcome == "sold" and payload["published_final_sold_price"] == 90000, (outcome, payload)
 
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 165834, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 165834, "2026-09-07 12:00 UTC", now)
         assert outcome == "terminal" and payload["final_status"] == "Unsold", (outcome, payload)
 
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 167246, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 167246, "2026-09-07 12:00 UTC", now)
         assert outcome == "not_real_estate" and payload is None, (outcome, payload)
     finally:
         bidwrangler.get_auction_detail = orig
@@ -235,11 +235,11 @@ def test_resolve_one_postponed_cancelled_text_override():
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc)
         bidwrangler.get_auction_detail = lambda session, auction_id: postponed
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
         assert outcome == "terminal" and payload["final_status"] == "Postponed", (outcome, payload)
 
         bidwrangler.get_auction_detail = lambda session, auction_id: cancelled
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
         assert outcome == "terminal" and payload["final_status"] == "Cancelled", (outcome, payload)
     finally:
         bidwrangler.get_auction_detail = orig
@@ -262,11 +262,176 @@ def test_resolve_one_gone():
     try:
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc)
-        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 999999, "2026-09-07 12:00 UTC", now)
+        [(outcome, payload)] = scrape_watch_bids.resolve_one(_FakeSession(), 999999, "2026-09-07 12:00 UTC", now)
         assert outcome == "gone" and payload is None, (outcome, payload)
     finally:
         bidwrangler.get_auction_detail = orig
     print("OK: resolve_one -> 404 classifies as gone")
+
+
+# --- Multi-parcel real estate auctions, from live samples captured
+# 2026-09-07 (see bidwrangler.is_multi_parcel_real_estate_auction /
+# multi_parcel_items / build_multi_parcel_row) ---
+
+MULTI_PARCEL_MIXED_STATUS = {
+    "id": 990001, "items_count": 3, "complete": False, "archived": False,
+    "name": "3 Parcels in Test County Selling to the Highest Bidders",
+    "description": "", "location": None,
+    "scheduled_end_time": "2026-09-10T22:00:00.000Z",
+    "items": [
+        {"name": "Subject One: 100 Main St, Testville, WV 25000", "status": "sold",
+         "description_without_html": "0.5 Acres District 1, Map 1, Parcel 1",
+         "api_bidding_state": {"high": {"amount": 50000}}},
+        {"name": "Subject Two: 200 Oak Ave, Testville, WV 25000", "status": "accepting_bids",
+         "description_without_html": "1.2 Acres District 1, Map 1, Parcel 2",
+         "api_bidding_state": {"high": {"amount": 30000}}},
+        {"name": "Subject Three: 300 Elm Rd, Testville, WV 25000", "status": "no_sale",
+         "description_without_html": "0.8 Acres District 1, Map 1, Parcel 3",
+         "api_bidding_state": {}},
+    ],
+}
+
+MULTI_PARCEL_BUNDLE_SOLD = {
+    "id": 990002, "items_count": 3, "complete": True, "archived": False,
+    "name": "2 Parcels in Test County Selling to the Highest Bidders",
+    "description": "", "location": None,
+    "scheduled_end_time": "2026-09-05T22:00:00.000Z",
+    "items": [
+        {"name": "Subject One: 100 Main St, Testville, WV 25000", "status": "no_sale",
+         "description_without_html": "0.5 Acres", "api_bidding_state": {}},
+        {"name": "Subject Two: 200 Oak Ave, Testville, WV 25000", "status": "no_sale",
+         "description_without_html": "1.2 Acres", "api_bidding_state": {}},
+        {"name": "Subject #3: Property in Entirety", "status": "sold",
+         "description_without_html": "Combination of Subjects 1-2",
+         "api_bidding_state": {"high": {"amount": 90000}}},
+    ],
+}
+
+PERSONAL_PROPERTY_MULTI_LOT = {
+    "id": 990003, "items_count": 3, "complete": False, "archived": False,
+    "name": "Morgantown, WV - Secured Party Auction - Delivery Trucks",
+    "description": "", "location": None, "scheduled_end_time": None,
+    "items": [
+        {"name": "Preview Information", "status": "pending", "description_without_html": "No preview", "api_bidding_state": {}},
+        {"name": "2003 Freightliner FedEx Parcel Delivery Truck", "status": "accepting_bids",
+         "description_without_html": "VIN: 4UZAANCP43CL84774", "api_bidding_state": {}},
+        {"name": "2004 Freightliner FedEx Parcel Delivery Truck", "status": "accepting_bids",
+         "description_without_html": "VIN: 4UZAANCP94CL85145", "api_bidding_state": {}},
+    ],
+}
+
+
+def test_is_multi_parcel_real_estate_auction():
+    assert bidwrangler.is_multi_parcel_real_estate_auction(MULTI_PARCEL_MIXED_STATUS) is True
+    assert bidwrangler.is_multi_parcel_real_estate_auction(MULTI_PARCEL_BUNDLE_SOLD) is True
+    assert bidwrangler.is_multi_parcel_real_estate_auction(PERSONAL_PROPERTY_MULTI_LOT) is False
+    # A single-lot auction (items_count == 1) is never multi-parcel.
+    assert bidwrangler.is_multi_parcel_real_estate_auction(SAMPLE_DETAIL) is False
+    print("OK: is_multi_parcel_real_estate_auction distinguishes multi-parcel land auctions "
+          "from personal-property multi-lot auctions")
+
+
+def test_multi_parcel_items_bundle_supersedes_individuals():
+    mixed_ids = [i for i, _ in bidwrangler.multi_parcel_items(MULTI_PARCEL_MIXED_STATUS)]
+    assert mixed_ids == [1, 2, 3], mixed_ids  # no bundle sold -- every individual parcel yielded
+
+    bundle_ids = [i for i, _ in bidwrangler.multi_parcel_items(MULTI_PARCEL_BUNDLE_SOLD)]
+    assert bundle_ids == [3], bundle_ids  # bundle (original position 3) sold -- only it is yielded,
+    # and crucially its index is its OWN original position, not 1 (see multi_parcel_items docstring
+    # on why a filtered-list-relative index would silently create duplicate rows across runs).
+    print("OK: multi_parcel_items yields every parcel when no bundle sold, and preserves each "
+          "item's true original index so parcel_key stays stable when a bundle sale collapses "
+          "the yielded set down to one item")
+
+
+def test_build_multi_parcel_row_land_vs_house_and_review_flag():
+    s_top = bidwrangler.summarize_auction(MULTI_PARCEL_MIXED_STATUS)
+    items = dict(bidwrangler.multi_parcel_items(MULTI_PARCEL_MIXED_STATUS))
+
+    row1 = bidwrangler.build_multi_parcel_row(s_top, items[1], 1)
+    assert row1["address"] == "100 Main St" and row1["city"] == "Testville" and row1["state"] == "WV"
+    assert row1["acreage"] == 0.5 and row1["tax_district"] == "1" and row1["tax_parcel"] == "1"
+    assert row1["parcel_key"].endswith("#1") and row1["review_flag"] is False
+
+    # Unparseable address (no "Subject N:" address text) -> flagged for review,
+    # not silently guessed.
+    unparseable = {"name": "Subject #1: Main Facility on 13.5 +/- Acres", "status": "accepting_bids",
+                   "description_without_html": "13.5 +/- Acres, no structure", "api_bidding_state": {}}
+    row_unparseable = bidwrangler.build_multi_parcel_row(s_top, unparseable, 9)
+    assert row_unparseable["review_flag"] is True and row_unparseable["city"] is None
+    assert row_unparseable["address"]  # still has *something* usable, just unconfident
+
+    # Acreage present, no sqft/bedroom language -> Land, not the "House" default.
+    land_only = {"name": "Subject Two: Vacant Rd, Testville, WV 25000", "status": "sold",
+                 "description_without_html": "3.0 +/- Acres, wooded, no structure", "api_bidding_state": {"high": {"amount": 8000}}}
+    row_land = bidwrangler.build_multi_parcel_row(s_top, land_only, 2)
+    assert row_land["property_type"] == "Land", row_land["property_type"]
+    print("OK: build_multi_parcel_row parses address/acreage/tax-ref correctly, flags unparseable "
+          "addresses for review instead of guessing, and classifies structureless acreage as Land")
+
+
+def test_is_subject_item_name_handles_numbers_past_ten():
+    """Regression test for a real bug found 2026-09-07 importing a genuine
+    16-parcel auction: the old regex only recognized the number words "one"
+    through "ten", so "Subject Eleven:" through "Subject Seventeen:" silently
+    failed to match and those 7 parcels were dropped from every downstream
+    table entirely (not flagged, not logged -- just missing)."""
+    for name in (
+        "Subject Eleven: 201 Astoria Road – Beckley, WV",
+        "Subject Twelve: Hedrick Street - Beckley, WV",
+        "Subject Seventeen: 127 Grear Ln - Beckley WV",
+        "Subject #23: Some Later Parcel",
+        "Subject 5: 34 Shaffer Lane Worthington, WV",
+    ):
+        assert parsing_utils.is_subject_item_name(name), name
+    print("OK: is_subject_item_name matches 'Subject N:' for any parcel number, not just one..ten")
+
+
+def test_parse_subject_address_run_on_name_flags_review_instead_of_blank_city():
+    """Regression test for a real bug found 2026-09-07: an item name with no
+    separator before the city (e.g. '1323 Adams Avenue Clarksburg, WV', vs.
+    the usual 'Street – City, WV') let the trailing-city regex backtrack its
+    whitespace into the city group, returning confident=True with a blank
+    city and the city silently folded into the address. Must fall through to
+    the not-confident case instead so the row gets flagged for review."""
+    addr = parsing_utils.parse_subject_address(
+        "Subject 1: 1323 Adams Avenue Clarksburg, WV",
+        "1.053 +/- Total SF 0.08 +/- Acres (as assessed) Ranch Style 3 Bedroom",
+    )
+    assert addr["confident"] is False, addr
+    assert addr["city"] is None, addr
+    assert addr["address"], addr  # still keeps the raw text, just unconfident
+
+    # Sanity: the normal dash-separated case still parses confidently.
+    addr2 = parsing_utils.parse_subject_address("Subject Two: 261 Ronda Road - Dry Branch, WV 25061")
+    assert addr2["confident"] is True and addr2["city"] == "Dry Branch", addr2
+    print("OK: parse_subject_address flags a run-on 'street city, state' name for review instead "
+          "of returning a confidently-wrong blank city")
+
+
+def test_scrape_watch_bids_multi_parcel_lifecycle():
+    """End-to-end: resolve_one() on a mixed-status multi-parcel auction
+    yields one independent outcome per parcel (sold/active/unsold all at
+    once from a single auction), matching real BidWrangler behavior."""
+    import datetime
+
+    class _FakeSession:
+        pass
+
+    orig = bidwrangler.get_auction_detail
+    bidwrangler.get_auction_detail = lambda session, auction_id: MULTI_PARCEL_MIXED_STATUS
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        results = scrape_watch_bids.resolve_one(_FakeSession(), 990001, "2026-09-07 12:00 UTC", now)
+        assert len(results) == 3, results
+        by_key = {payload["parcel_key"][-1]: (outcome, payload) for outcome, payload in results}
+        assert by_key["1"][0] == "sold" and by_key["1"][1]["published_final_sold_price"] == 50000
+        assert by_key["2"][0] == "active" and by_key["2"][1]["final_status"] == "Active"
+        assert by_key["3"][0] == "terminal" and by_key["3"][1]["final_status"] == "Unsold"
+    finally:
+        bidwrangler.get_auction_detail = orig
+    print("OK: scrape_watch_bids.resolve_one resolves each parcel of a multi-parcel auction "
+          "independently (sold/active/unsold simultaneously from one auction page)")
 
 
 if __name__ == "__main__":
@@ -280,4 +445,10 @@ if __name__ == "__main__":
     test_resolve_one_lifecycle()
     test_resolve_one_postponed_cancelled_text_override()
     test_resolve_one_gone()
+    test_is_multi_parcel_real_estate_auction()
+    test_multi_parcel_items_bundle_supersedes_individuals()
+    test_build_multi_parcel_row_land_vs_house_and_review_flag()
+    test_is_subject_item_name_handles_numbers_past_ten()
+    test_parse_subject_address_run_on_name_flags_review_instead_of_blank_city()
+    test_scrape_watch_bids_multi_parcel_lifecycle()
     print("\nAll manual smoke tests passed.")
