@@ -32,7 +32,7 @@ from common import supabase_client, wv_assessment
 CONFLICT_THRESHOLD = 0.20
 
 _SELECT_FIELDS = (
-    "id,city,state,zip,address,lat,lng,tax_district,tax_map,tax_parcel,"
+    "id,city,state,zip,address,lat,lng,tax_district,tax_map,tax_parcel,acreage,"
     "comp_sqft,comp_sqft_source,property_type"
 )
 
@@ -128,7 +128,15 @@ def resolve_one(session, row):
         reason = f"No WV Assessment match for county={county_code} map={map_} parcel={parcel}"
         return {"review_flag": True, "review_reason": reason, "tax_county": county_name}, reason
 
-    root_pid = results[0].get("root_pid")
+    # The search is a substring/prefix match, not exact -- a bare "Parcel 33"
+    # can return a dozen sibling sub-parcels (33.0, 33.1, ... 33.10) across
+    # multiple districts. Score them instead of blindly trusting result
+    # order (see wv_assessment.select_best_match's docstring for the
+    # 2026-09-07 production case that exposed this).
+    best = wv_assessment.select_best_match(
+        results, parcel=parcel, district=row.get("tax_district"), acreage=row.get("acreage"),
+    )
+    root_pid = best.get("root_pid") if best else None
     if not root_pid:
         reason = "Matched a record but couldn't find its detail-page id"
         return {"review_flag": True, "review_reason": reason, "tax_county": county_name}, reason
