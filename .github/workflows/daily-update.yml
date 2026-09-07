@@ -1,14 +1,13 @@
 name: Daily auction data update
 
-# Runs 3x/day (9am / 1pm / 6pm ET) so new sold results and square footage
-# enrichment stay current without waiting a full day -- cheap to do since
-# GitHub Actions is unlimited on a public repo. Times are in UTC and don't
-# shift with US daylight saving, so actual ET local time drifts by an hour
-# for part of the year; not worth the complexity of correcting for that.
 on:
   schedule:
-    - cron: "0 13,17,22 * * *"
-  workflow_dispatch: {}
+    # 11:00 UTC = 7:00 AM Asia/Manila is NOT this -- Elijah is in Asia/Manila
+    # (UTC+8), and the auctions are all Eastern-time WV properties, so this
+    # runs at 09:00 America/New_York (handles EST/EDT drift within a couple
+    # hours either way, which doesn't matter for a "once a day" refresh):
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 jobs:
   update:
@@ -37,6 +36,8 @@ jobs:
 
       - name: Enrich square footage from WV Assessment
         id: sqft_enrichment
+        # Never fails the job -- unresolved parcels are normal and get flagged
+        # in Needs Review rather than treated as a pipeline error.
         run: python enrich_sqft_wv.py
 
       - name: Fail the run if a scraping step broke
