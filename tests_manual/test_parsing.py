@@ -123,6 +123,152 @@ def test_get_assessment_detail_fallback_to_card_sum():
     print("OK: get_assessment_detail fallback-to-card-sum ->", detail["comp_sqft"])
 
 
+# --- Real-estate classification + lifecycle resolution, from live samples
+# captured 2026-09-07 (see bidwrangler.is_real_estate_auction / scrape_watch_bids.resolve_one) ---
+import scrape_watch_bids  # noqa: E402
+
+REAL_ESTATE_ACTIVE = {
+    "id": 166759, "items_count": 1, "complete": False, "archived": False,
+    "name": "Updated 2 Bedroom on a Spacious Lot in Charleston",
+    "description": "<p>ONLINE REAL ESTATE AUCTION Bidding begins closing Tuesday, September 8th</p>",
+    "location": {"street": "1855 Oakhurst Dr.", "city": "Charleston", "state": "WV", "zip": "25309",
+                 "lat": "38.3344481", "lng": "-81.7058576"},
+    "items": [{
+        "status": "active",
+        "scheduled_end_time": "2026-09-08T23:00:00.000Z",
+        "description_without_html": "ONLINE REAL ESTATE AUCTION Bidding begins closing Tuesday, September 8th at 7:00PM 1855 Oakhurst Dr. Charleston, WV",
+        "api_bidding_state": {"high": {"amount": 34000}},
+        "bidding_configuration": {"reserve_amount": 50000},
+    }],
+}
+
+REAL_ESTATE_SOLD = {
+    "id": 160625, "items_count": 1, "complete": True, "archived": False,
+    "name": "SOLD - Two-Story 3 Bedroom in Charleston",
+    "description": "<p>Real Estate Auction</p>",
+    "location": {"street": "123 Main St", "city": "Charleston", "state": "WV", "zip": "25301",
+                 "lat": "38.35", "lng": "-81.63"},
+    "items": [{
+        "status": "sold",
+        "scheduled_end_time": "2026-05-27T23:00:00.000Z",
+        "description_without_html": "Real Estate Auction. 1,200 sq ft.",
+        "api_bidding_state": {"high": {"amount": 90000}},
+        "bidding_configuration": {},
+    }],
+}
+
+REAL_ESTATE_UNSOLD = {
+    "id": 165834, "items_count": 1, "complete": True, "archived": True,
+    "name": "5.3 Acre Former School Campus on the River",
+    "description": "<p>Real Estate Auction</p>",
+    "location": {"street": "100 Brannon Street", "city": "East Bank", "state": "WV", "zip": "25067",
+                 "lat": "38.29", "lng": "-81.56"},
+    "items": [{
+        "status": "no_sale",
+        "scheduled_end_time": "2026-08-25T14:00:00.000Z",
+        "description_without_html": "Real Estate Auction. 5.3 acres.",
+        "api_bidding_state": {"high": {"amount": 220000}},
+        "bidding_configuration": {},
+    }],
+}
+
+PERSONAL_PROPERTY = {
+    "id": 167246, "items_count": 623, "complete": False, "archived": False,
+    "name": "Coalton, WV - 2011 Toyota RAV4, Antiques & More!",
+    "description": "<p>Online Personal Property Auction</p>",
+    "location": {"street": "1 Main St", "city": "Coalton", "state": "WV", "zip": "26257"},
+    "items": [{"status": "active", "scheduled_end_time": None, "description_without_html": "Sept 1, 2-5pm",
+               "api_bidding_state": {}, "bidding_configuration": {}}],
+}
+
+
+def test_is_real_estate_auction():
+    s = bidwrangler.summarize_auction(REAL_ESTATE_ACTIVE)
+    assert bidwrangler.is_real_estate_auction(REAL_ESTATE_ACTIVE, s) is True
+    s2 = bidwrangler.summarize_auction(PERSONAL_PROPERTY)
+    assert bidwrangler.is_real_estate_auction(PERSONAL_PROPERTY, s2) is False
+    print("OK: is_real_estate_auction classifies real estate vs personal property")
+
+
+def test_resolve_one_lifecycle():
+    class _FakeSession:
+        pass
+
+    fixtures = {
+        166759: REAL_ESTATE_ACTIVE,
+        160625: REAL_ESTATE_SOLD,
+        165834: REAL_ESTATE_UNSOLD,
+        167246: PERSONAL_PROPERTY,
+    }
+    orig = bidwrangler.get_auction_detail
+    bidwrangler.get_auction_detail = lambda session, auction_id: fixtures[auction_id]
+    try:
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
+        assert outcome == "active" and payload["final_status"] == "Active", (outcome, payload)
+
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 160625, "2026-09-07 12:00 UTC", now)
+        assert outcome == "sold" and payload["published_final_sold_price"] == 90000, (outcome, payload)
+
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 165834, "2026-09-07 12:00 UTC", now)
+        assert outcome == "terminal" and payload["final_status"] == "Unsold", (outcome, payload)
+
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 167246, "2026-09-07 12:00 UTC", now)
+        assert outcome == "not_real_estate" and payload is None, (outcome, payload)
+    finally:
+        bidwrangler.get_auction_detail = orig
+    print("OK: resolve_one -> active/sold/unsold/not_real_estate all classify correctly")
+
+
+def test_resolve_one_postponed_cancelled_text_override():
+    class _FakeSession:
+        pass
+
+    postponed = dict(REAL_ESTATE_ACTIVE)
+    postponed["name"] = "POSTPONED - Updated 2 Bedroom on a Spacious Lot in Charleston"
+    cancelled = dict(REAL_ESTATE_ACTIVE)
+    cancelled["name"] = "CANCELLED - Updated 2 Bedroom on a Spacious Lot in Charleston"
+
+    orig = bidwrangler.get_auction_detail
+    try:
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        bidwrangler.get_auction_detail = lambda session, auction_id: postponed
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
+        assert outcome == "terminal" and payload["final_status"] == "Postponed", (outcome, payload)
+
+        bidwrangler.get_auction_detail = lambda session, auction_id: cancelled
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 166759, "2026-09-07 12:00 UTC", now)
+        assert outcome == "terminal" and payload["final_status"] == "Cancelled", (outcome, payload)
+    finally:
+        bidwrangler.get_auction_detail = orig
+    print("OK: resolve_one -> title text overrides to Postponed/Cancelled")
+
+
+def test_resolve_one_gone():
+    import requests
+
+    class _FakeSession:
+        pass
+
+    def _raise_404(session, auction_id):
+        resp = requests.Response()
+        resp.status_code = 404
+        raise requests.HTTPError(response=resp)
+
+    orig = bidwrangler.get_auction_detail
+    bidwrangler.get_auction_detail = _raise_404
+    try:
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        outcome, payload = scrape_watch_bids.resolve_one(_FakeSession(), 999999, "2026-09-07 12:00 UTC", now)
+        assert outcome == "gone" and payload is None, (outcome, payload)
+    finally:
+        bidwrangler.get_auction_detail = orig
+    print("OK: resolve_one -> 404 classifies as gone")
+
+
 if __name__ == "__main__":
     test_summarize_auction()
     test_parse_tax_reference()
@@ -130,4 +276,8 @@ if __name__ == "__main__":
     test_compute_ppsf()
     test_get_assessment_detail_parsing()
     test_get_assessment_detail_fallback_to_card_sum()
+    test_is_real_estate_auction()
+    test_resolve_one_lifecycle()
+    test_resolve_one_postponed_cancelled_text_override()
+    test_resolve_one_gone()
     print("\nAll manual smoke tests passed.")
