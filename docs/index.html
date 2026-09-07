@@ -24,7 +24,7 @@ h1{margin:0;font-size:28px} .small{font-size:12px;color:var(--muted)}
 input,select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px}
 .search{display:flex;max-width:540px;width:100%}.search input{width:100%}
 .section{display:none}.section.active{display:block}
-.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
 .k{font-size:12px;color:var(--muted)}.v{font-size:28px;font-weight:800;margin-top:5px}
 .good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}
@@ -53,7 +53,7 @@ th{color:var(--muted);background:var(--panel);position:sticky;top:0;z-index:1}
 .marketlabel{font-size:13px;font-weight:800;margin-bottom:4px}.marketdesc{font-size:11px;color:var(--muted);line-height:1.4}
 a{color:#d7dce4}
 .loading{padding:40px;text-align:center;color:var(--muted)}
-@media(max-width:1100px){.watchgrid,.comparegrid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:1100px){.watchgrid,.comparegrid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(3,1fr)}.cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:850px){.app{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}.cards,.evalgrid{grid-template-columns:1fr 1fr}}
 @media(max-width:620px){.cards,.evalgrid,.metrics,.watchgrid,.comparegrid{grid-template-columns:1fr}.main{padding:16px}}
 </style>
@@ -68,6 +68,7 @@ a{color:#d7dce4}
 <button onclick="showTab('past',this)">Past Auctions</button>
 <button onclick="showTab('watch',this)">Auction Watch</button>
 <button onclick="showTab('evaluator',this)">Property Evaluator</button>
+<button onclick="showTab('unsold',this)">Unsold Opportunities</button>
 <button onclick="showTab('review',this)">Needs Review</button>
 </div>
 </aside>
@@ -80,10 +81,12 @@ a{color:#d7dce4}
 
 <section id="dashboard" class="section active">
 <div class="cards">
-<div class="card"><div class="k">Past auction records</div><div class="v" id="statPast">-</div></div>
-<div class="card"><div class="k">Priced auction records</div><div class="v" id="statPriced">-</div></div>
-<div class="card"><div class="k">Comps with square footage</div><div class="v good" id="statSqft">-</div></div>
-<div class="card"><div class="k">Upcoming Watch records</div><div class="v warn" id="statWatch">-</div></div>
+<div class="card"><div class="k">Past Auctions</div><div class="v" id="statPast">-</div></div>
+<div class="card"><div class="k">Priced Auctions</div><div class="v" id="statPriced">-</div></div>
+<div class="card"><div class="k">Comps With Square Footage</div><div class="v good" id="statSqft">-</div></div>
+<div class="card"><div class="k">Upcoming Auctions</div><div class="v warn" id="statWatch">-</div></div>
+<div class="card"><div class="k">Unsold Opportunities</div><div class="v warn" id="statUnsold">-</div></div>
+<div class="card"><div class="k">Needs Review</div><div class="v bad" id="statReview">-</div></div>
 </div>
 <div class="panelhead"><h2>Most recent sales</h2></div>
 <div class="comparegrid" id="recentGrid"><div class="loading">Loading...</div></div>
@@ -106,7 +109,7 @@ a{color:#d7dce4}
 <section id="watch" class="section">
 <div class="panelhead"><h2>Auction Watch</h2></div>
 <div class="toolbar">
- <select id="watchStatus" onchange="renderWatch()"><option value="">All statuses</option><option>Upcoming</option><option>Closing</option></select>
+ <select id="watchStatus" onchange="renderWatch()"><option value="">All statuses</option><option>Upcoming</option><option>Closing</option><option>Cancelled</option><option>Postponed</option><option>Unsold</option><option>Needs Review</option></select>
  <select id="watchType" onchange="renderWatch()"><option value="">All property types</option></select>
 </div>
 <div class="watchgrid" id="watchGrid"><div class="loading">Loading...</div></div>
@@ -136,6 +139,17 @@ a{color:#d7dce4}
 </div>
 <div class="panelhead" style="margin-top:20px"><h2>Comparable Sales</h2></div>
 <div class="comparegrid" id="compareGrid"></div>
+</section>
+
+<section id="unsold" class="section">
+<div class="panelhead"><h2>Unsold Opportunities</h2></div>
+<div class="notice">Real estate auctions that closed without a confirmed sale -- cancelled, postponed, no buyer, or an outcome we couldn't confirm. These properties may still be available and can be some of the best seller leads.</div>
+<div class="scroll">
+<table>
+<thead><tr><th>Date</th><th>Address</th><th>City</th><th>State</th><th>Type</th><th>Status</th><th>Reason</th><th></th></tr></thead>
+<tbody id="unsoldRows"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody>
+</table>
+</div>
 </section>
 
 <section id="review" class="section">
@@ -169,6 +183,11 @@ let evalCandidates = [];
 
 const money=v=>v==null?"Unavailable":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
 const getPpsf=r=>(r.comp_sqft&&r.published_final_sold_price)?r.published_final_sold_price/r.comp_sqft:null;
+// A sale only counts toward PPSF/comps once it's been verified -- anything
+// flagged in Needs Review (missing sqft, a stated-vs-county conflict, or a
+// property-class mismatch) stays visible in Past Auctions but is excluded
+// from every Low/Median/High PPSF calculation until it's cleared.
+const usableComp=r=>r.published_final_sold_price!=null && r.comp_sqft!=null && !r.review_flag;
 const zillowUrl=r=>{
  const address=[r.address,r.city,r.state,r.zip].filter(Boolean).join(" ");
  return "https://www.zillow.com/homes/"+encodeURIComponent(address)+"_rb/";
@@ -179,7 +198,7 @@ function showTab(id,btn){
  document.getElementById(id).classList.add("active");
  document.querySelectorAll(".nav button").forEach(el=>el.classList.remove("active"));
  btn.classList.add("active");
- document.getElementById("title").textContent={dashboard:"Dashboard",past:"Past Auctions",watch:"Auction Watch",evaluator:"Property Evaluator",review:"Needs Review"}[id];
+ document.getElementById("title").textContent={dashboard:"Dashboard",past:"Past Auctions",watch:"Auction Watch",evaluator:"Property Evaluator",unsold:"Unsold Opportunities",review:"Needs Review"}[id];
 }
 
 function percentile(values,p){
@@ -190,7 +209,7 @@ function percentile(values,p){
 }
 
 function marketLabel(ppsf,values){
- if(!ppsf||values.length<3)return ["PPSF AVAILABLE","More local comps are needed for a low, medium, or high ranking."];
+ if(!ppsf||values.length<3)return ["PPSF ONLY","Not enough verified local comps yet for a low, medium, or high ranking."];
  const q1=percentile(values,.25),q3=percentile(values,.75);
  if(ppsf<=q1)return ["LOW PPSF","Sold for a lower price per square foot than most comparable auction sales."];
  if(ppsf>=q3)return ["HIGH PPSF","Sold for a higher price per square foot than most comparable auction sales."];
@@ -206,7 +225,7 @@ function initFilters(){
 
 function localPeerValues(r){
  return past
-   .filter(x=>x.published_final_sold_price!=null && x.comp_sqft!=null)
+   .filter(usableComp)
    .filter(x=>x.property_type===r.property_type)
    .filter(x=>{
       const sameZip=r.zip && x.zip===r.zip;
@@ -220,7 +239,7 @@ function localPeerValues(r){
 function renderRecent(){
  const recentGrid=document.getElementById("recentGrid");
  recentGrid.innerHTML="";
- const recent=[...past].filter(r=>r.published_final_sold_price!=null&&r.comp_sqft!=null)
+ const recent=[...past].filter(usableComp)
    .sort((a,b)=>(b.auction_date||"").localeCompare(a.auction_date||"")).slice(0,9);
  if(!recent.length){recentGrid.innerHTML='<div class="small">No priced comps yet.</div>';return;}
  recent.forEach(r=>{
@@ -260,8 +279,11 @@ function renderPast(){
  filtered.forEach(r=>{
   const p=getPpsf(r);
   const source=r.comp_sqft_source_url?`<a href="${r.comp_sqft_source_url}" target="_blank">${r.comp_sqft_source||"Open source"}</a>`:(r.comp_sqft_source||"");
+  const statusTag=r.review_flag
+    ? `<span class="tag" style="color:var(--warn)" title="${r.review_reason||"Flagged for review"}">${r.status||""} · Needs Review</span>`
+    : `<span class="tag">${r.status||""}</span>`;
   const tr=document.createElement("tr");
-  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.zip||""}</td><td>${r.property_type||""}</td><td>${r.published_final_sold_price==null?"Not published":money(r.published_final_sold_price)}</td><td>${r.comp_sqft?Number(r.comp_sqft).toLocaleString():""}</td><td>${p?"$"+p.toFixed(2):""}</td><td>${source}</td><td><span class="tag">${r.status||""}</span></td>`;
+  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.zip||""}</td><td>${r.property_type||""}</td><td>${r.published_final_sold_price==null?"Not published":money(r.published_final_sold_price)}</td><td>${r.comp_sqft?Number(r.comp_sqft).toLocaleString():""}</td><td>${p&&!r.review_flag?"$"+p.toFixed(2):(p?"(excluded)":"")}</td><td>${source}</td><td>${statusTag}</td>`;
   pastRows.appendChild(tr);
  });
 }
@@ -280,9 +302,10 @@ function renderWatch(){
   const link=r.bid_source_url?`<a class="linkbtn" href="${r.bid_source_url}" target="_blank">Open Exact Bidding Page</a>`:`<div class="nolink">Exact bidding page not verified yet</div>`;
   const liveBid=r.current_high_bid!=null?money(r.current_high_bid):"Open exact page";
   const premium=r.current_bid_with_premium!=null?money(r.current_bid_with_premium):"Calculated on live page";
+  const reasonLine=r.final_status_reason?`<div class="watchmeta" style="margin-bottom:6px">${r.final_status_reason}</div>`:"";
   div.innerHTML=`<div class="watchtop"><div><div class="watchtitle">${r.address||r.title}</div><div class="watchmeta">${r.city||""}, ${r.state||""} ${r.zip||""}</div><div class="watchmeta">${r.auction_date||""} ${r.auction_time||""} · ${r.property_type||""}</div></div><span class="tag">${r.status||""}</span></div>
   <div class="bidbox"><div class="biditem"><div class="bidlabel">Current High Bid</div><div class="bidvalue">${liveBid}</div></div><div class="biditem"><div class="bidlabel">With Premium</div><div class="bidvalue">${premium}</div></div></div>
-  <div class="watchmeta" style="margin-bottom:10px">Checked: ${r.bid_last_checked||"Not verified yet"}</div>${link}`;
+  ${reasonLine}<div class="watchmeta" style="margin-bottom:10px">Checked: ${r.bid_last_checked||"Not verified yet"}</div>${link}`;
   watchGrid.appendChild(div);
  });
 }
@@ -297,7 +320,7 @@ function findSimilar(){
  document.getElementById("evalSubjectLine").textContent = address ? `Evaluating: ${address}` : "";
 
  evalCandidates = past
-  .filter(r=>r.published_final_sold_price!=null && r.comp_sqft!=null)
+  .filter(usableComp)
   .filter(r=>r.property_type===type)
   .filter(r=>((zip&&r.zip===zip)||(city&&(r.city||"").toLowerCase()===city)))
   .map(r=>({...r,sizeDiff:subj?Math.abs(r.comp_sqft-subj)/subj:null}))
@@ -346,11 +369,29 @@ function renderEvaluator(vals){
  });
 }
 
+const UNSOLD_OPPORTUNITY_STATUSES = ["Cancelled","Postponed","Unsold","Needs Review"];
+
 function renderStats(){
  document.getElementById("statPast").textContent = past.length;
  document.getElementById("statPriced").textContent = past.filter(r=>r.published_final_sold_price!=null).length;
  document.getElementById("statSqft").textContent = past.filter(r=>r.comp_sqft!=null).length;
- document.getElementById("statWatch").textContent = watch.length;
+ document.getElementById("statWatch").textContent = watch.filter(r=>r.final_status==="Active").length;
+ document.getElementById("statUnsold").textContent = watch.filter(r=>UNSOLD_OPPORTUNITY_STATUSES.includes(r.final_status)).length;
+ document.getElementById("statReview").textContent = past.filter(r=>r.review_flag).length;
+}
+
+function renderUnsold(){
+ const unsoldRows=document.getElementById("unsoldRows");
+ unsoldRows.innerHTML="";
+ const rows = watch.filter(r=>UNSOLD_OPPORTUNITY_STATUSES.includes(r.final_status))
+   .sort((a,b)=>(b.auction_date||"").localeCompare(a.auction_date||""));
+ if(!rows.length){unsoldRows.innerHTML='<tr><td colspan="8" class="small">Nothing here right now.</td></tr>';return;}
+ rows.forEach(r=>{
+  const tr=document.createElement("tr");
+  const pyleLink=r.bid_source_url?`<a class="linkbtn" href="${r.bid_source_url}" target="_blank" rel="noopener">Pyle</a>`:"";
+  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||r.title||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.property_type||""}</td><td><span class="tag">${r.final_status||""}</span></td><td>${r.final_status_reason||""}</td><td style="display:flex;gap:6px">${pyleLink}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Zillow</a></td>`;
+  unsoldRows.appendChild(tr);
+ });
 }
 
 function renderReview(){
@@ -383,6 +424,7 @@ async function loadData(){
   renderRecent();
   renderPast();
   renderWatch();
+  renderUnsold();
   renderReview();
   subtitle.textContent = `Newest auction data, enriched comps, and verified bidding links. Loaded ${past.length} past + ${watch.length} watch records.`;
  } catch (err) {
