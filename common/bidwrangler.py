@@ -372,7 +372,12 @@ def build_multi_parcel_row(s_top: dict, item: dict, parcel_index: int) -> dict:
     addr = parsing_utils.parse_subject_address(name, desc)
     district, map_, parcel = parsing_utils.parse_tax_reference(desc)
     stated_sqft = parsing_utils.parse_sqft_from_text(desc)
-    acreage = parsing_utils.parse_acreage_from_text(desc)
+    # Try the description first (it's usually more detailed), but fall back
+    # to the item's own name -- confirmed live 2026-09-07: a bare acreage
+    # parcel named e.g. "SUBJECT 1: 27.16+/- Acres" states the figure
+    # cleanly in the name itself even when the description's own phrasing
+    # (e.g. a unicode "±" typo variant) doesn't match.
+    acreage = parsing_utils.parse_acreage_from_text(desc) or parsing_utils.parse_acreage_from_text(name)
     high = (item.get("api_bidding_state") or {}).get("high") or {}
 
     property_type = parsing_utils.guess_property_type(name, desc)
