@@ -183,6 +183,13 @@ let evalCandidates = [];
 
 const money=v=>v==null?"Unavailable":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
 const getPpsf=r=>(r.comp_sqft&&r.published_final_sold_price)?r.published_final_sold_price/r.comp_sqft:null;
+// Vacant land parcels (common from multi-parcel auctions -- see the WV
+// Property backfill) have an acreage but no usable square footage, so a
+// $/sqft figure doesn't apply to them. $/acre is the parallel figure for
+// those rows instead -- shown where PPSF would normally go, never mixed
+// into the sqft-based PPSF stats above.
+const getPpa=r=>(r.acreage&&r.published_final_sold_price)?r.published_final_sold_price/r.acreage:null;
+const isLandOnly=r=>r.comp_sqft==null && r.acreage!=null;
 // A sale only counts toward PPSF/comps once it's been verified -- anything
 // flagged in Needs Review (missing sqft, a stated-vs-county conflict, or a
 // property-class mismatch) stays visible in Past Auctions but is excluded
@@ -282,8 +289,19 @@ function renderPast(){
   const statusTag=r.review_flag
     ? `<span class="tag" style="color:var(--warn)" title="${r.review_reason||"Flagged for review"}">${r.status||""} · Needs Review</span>`
     : `<span class="tag">${r.status||""}</span>`;
+  // Vacant land parcels have acreage but no usable sqft -- show acreage in
+  // the Sq Ft column and $/acre in the PPSF column instead of leaving both
+  // blank. Never mixed with the sqft-based PPSF figure above.
+  const landOnly=isLandOnly(r);
+  const sqftCell=r.comp_sqft
+    ? Number(r.comp_sqft).toLocaleString()
+    : (landOnly?`${Number(r.acreage).toLocaleString()} acres`:"");
+  const pa=landOnly?getPpa(r):null;
+  const ppsfCell=landOnly
+    ? (pa&&!r.review_flag?"$"+pa.toFixed(2)+"/acre":(pa?"(excluded)":""))
+    : (p&&!r.review_flag?"$"+p.toFixed(2):(p?"(excluded)":""));
   const tr=document.createElement("tr");
-  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.zip||""}</td><td>${r.property_type||""}</td><td>${r.published_final_sold_price==null?"Not published":money(r.published_final_sold_price)}</td><td>${r.comp_sqft?Number(r.comp_sqft).toLocaleString():""}</td><td>${p&&!r.review_flag?"$"+p.toFixed(2):(p?"(excluded)":"")}</td><td>${source}</td><td>${statusTag}</td>`;
+  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.zip||""}</td><td>${r.property_type||""}</td><td>${r.published_final_sold_price==null?"Not published":money(r.published_final_sold_price)}</td><td>${sqftCell}</td><td>${ppsfCell}</td><td>${source}</td><td>${statusTag}</td>`;
   pastRows.appendChild(tr);
  });
 }
