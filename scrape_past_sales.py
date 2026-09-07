@@ -1,60 +1,36 @@
 #!/usr/bin/env python3
-"""Daily job: discover every auction linked from joerpyleauctions.com/results,
-pull its full detail from the BidWrangler API, and upsert the ones that have
-actually sold (status complete/archived with a winning bid) into
-past_auctions.
+"""Daily job: discover every SOLD real-estate auction linked from
+joerpyleauctions.com/results, and upsert it into past_auctions.
+
+Only real estate -- Joe Pyle's own account also runs personal-property
+auctions (vehicles, tools, estate contents) through the same /results
+archive and the same BidWrangler platform, and those are excluded here via
+bidwrangler.is_real_estate_auction() (single-lot + "real estate" in the
+listing text; a personal-property auction is multi-lot and would otherwise
+get mis-recorded as a single sale using only its first lot's price).
 
 Also parses the county tax District/Map/Parcel out of the listing description
 when present -- enrich_sqft_wv.py uses that to look up official square
 footage, so this should run before that job in the daily workflow.
+
+Confirmed 2026-09-07: /results only exposes roughly the last 3.5 months of
+sold auctions before its own pagination runs out (a genuine limit of what
+the auctioneer's site publicly exposes, not a setting here to raise -- see
+bidwrangler.list_result_page_auction_ids's docstring). Going back further
+would need a records export from Joe Pyle's office to import once by hand.
 """
 import sys
 import time
 
 from common import bidwrangler, parsing_utils, supabase_client
-from common.parsing_utils import compute_ppsf
 
 
 def build_past_row(detail: dict) -> dict:
     s = bidwrangler.summarize_auction(detail)
-    district, map_, parcel = parsing_utils.parse_tax_reference(s["description"])
+    tax_ref = parsing_utils.parse_tax_reference(s["description"])
     stated_sqft = parsing_utils.parse_sqft_from_text(s["description"])
-
-    row = {
-        "bidwrangler_id": s["bidwrangler_id"],
-        "auction_date": (s["scheduled_end_time"] or "")[:10] or None,
-        "address": s["address"],
-        "city": s["city"],
-        "state": s["state"],
-        "zip": s["zip"],
-        "property_type": parsing_utils.guess_property_type(s["name"], s["description"]),
-        "published_final_sold_price": s["current_high_bid"],
-        "status": "Sold",
-        "title_notes": s["name"],
-        "source_url": s["detail_url"],
-        "tax_district": district,
-        "tax_map": map_,
-        "tax_parcel": parcel,
-        "lat": s["lat"],
-        "lng": s["lng"],
-        # These five must always be present (even as null) -- Supabase's bulk
-        # upsert rejects a batch where different rows have different sets of
-        # keys (PGRST102: "All object keys must match").
-        "comp_sqft": None,
-        "comp_sqft_source": None,
-        "comp_sqft_source_url": None,
-        "comp_sqft_quality": None,
-        "comp_sqft_note": None,
-    }
-    if stated_sqft:
-        row["comp_sqft"] = stated_sqft
-        row["comp_sqft_source"] = "Auction listing (auctioneer-stated)"
-        row["comp_sqft_source_url"] = s["marketing_url"]
-        row["comp_sqft_quality"] = "Unverified -- from listing copy, not the county record"
-        row["comp_sqft_note"] = (
-            f"Auctioneer's listing states {stated_sqft:g} sq ft. Run enrich_sqft_wv.py to "
-            "confirm/replace with the official WV Assessment figure."
-        )
+    row = bidwrangler.build_past_auction_row(s, tax_ref, stated_sqft)
+    row["property_type"] = parsing_utils.guess_property_type(s["name"], s["description"])
     return row
 
 
@@ -66,6 +42,7 @@ def run(max_result_pages: int = 60):
     print(f"Found {len(ids)} auction ids linked from joerpyleauctions.com/results")
 
     rows = []
+    skipped_not_re = 0
     errors = []
     for auction_id in ids:
         try:
@@ -79,13 +56,23 @@ def run(max_result_pages: int = 60):
         if not is_sold:
             continue  # still upcoming/active -- that's scrape_watch_bids.py's job
 
-        row = build_past_row(detail)
+        s = bidwrangler.summarize_auction(detail)
+        if not bidwrangler.is_real_estate_auction(detail, s):
+            skipped_not_re += 1
+            continue  # personal property -- not a comp for this business
+
+        tax_ref = parsing_utils.parse_tax_reference(s["description"])
+        stated_sqft = parsing_utils.parse_sqft_from_text(s["description"])
+        row = bidwrangler.build_past_auction_row(s, tax_ref, stated_sqft)
+        row["property_type"] = parsing_utils.guess_property_type(s["name"], s["description"])
+
         if row["published_final_sold_price"] is None:
             continue  # no winning bid recorded (cancelled/unsold lot) -- skip
         rows.append(row)
         time.sleep(0.3)
 
-    print(f"{len(rows)} sold auctions to upsert, {len(errors)} lookups failed")
+    print(f"{len(rows)} sold real-estate auctions to upsert "
+          f"({skipped_not_re} personal-property auctions skipped), {len(errors)} lookups failed")
 
     result = {"inserted_or_updated": 0}
     if rows:
