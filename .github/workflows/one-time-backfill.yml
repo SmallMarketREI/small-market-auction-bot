@@ -1,0 +1,31 @@
+name: One-time historical backfill
+
+# Manual-only -- no schedule. Run this ONCE from the Actions tab after adding
+# import_audited_backfill.py + backfill_data/audited_backfill_2026-09-07.json
+# and running supabase/schema_v4.sql, to load the genuine March-May history
+# the daily scraper can't reach on its own (see import_audited_backfill.py's
+# docstring for exactly what this loads and where it came from).
+#
+# Safe to run more than once by accident -- every row upserts on parcel_key,
+# so re-running just re-writes the same 75 rows rather than duplicating them.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Import audited historical backfill
+        run: python import_audited_backfill.py --apply
