@@ -56,6 +56,19 @@ def run(max_result_pages: int = 60):
     rows = []
     skipped_not_re = 0
     multi_parcel_auctions = 0
+    # source_urls of auctions found to be multi-parcel this run -- any OLD
+    # past_auctions row keyed by the bare source_url (parcel_key == source_url,
+    # the single-lot shape) is now stale and must be removed, or it lingers
+    # forever as a duplicate alongside the correct per-parcel #1/#2/... rows.
+    # This happens for real: an auction scraped once before multi-parcel
+    # support existed (or before is_multi_parcel_real_estate_auction's "Subject
+    # N:" matching covered this auction's naming) gets a single-lot row using
+    # only its first item; a later run that now classifies it correctly adds
+    # the per-parcel rows but, without this cleanup, leaves that old row
+    # behind -- confirmed in production 2026-09-07 (a 2-parcel land auction
+    # ended up with 3 past_auctions rows: the 2 correct ones plus a stale
+    # single-lot leftover, double-counting the sale in comps/stats).
+    multi_parcel_source_urls = set()
     errors = []
     for auction_id in ids:
         try:
@@ -73,6 +86,7 @@ def run(max_result_pages: int = 60):
 
         if bidwrangler.is_multi_parcel_real_estate_auction(detail):
             multi_parcel_auctions += 1
+            multi_parcel_source_urls.add(s["detail_url"])
             for idx, item in bidwrangler.multi_parcel_items(detail):
                 if item.get("status") != "sold":
                     continue  # this specific parcel didn't sell -- not a past-auctions row
@@ -106,6 +120,17 @@ def run(max_result_pages: int = 60):
     result = {"inserted_or_updated": 0}
     if rows:
         result = supabase_client.upsert("past_auctions", rows, on_conflict="parcel_key")
+
+    stale_cleaned = 0
+    for source_url in multi_parcel_source_urls:
+        try:
+            supabase_client.delete_eq("past_auctions", "parcel_key", source_url)
+            stale_cleaned += 1
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"stale single-lot cleanup for {source_url}: {e}")
+    if stale_cleaned:
+        print(f"Checked {stale_cleaned} multi-parcel auctions for a stale single-lot leftover row "
+              f"(harmless no-op delete if none existed)")
 
     supabase_client.log_run(
         "past_sales",
