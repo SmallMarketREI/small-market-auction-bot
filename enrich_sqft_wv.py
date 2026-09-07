@@ -78,8 +78,22 @@ def resolve_one(session, row):
         arcgis = wv_assessment.lookup_parcel_by_latlng(session, lat, lng, address_hint=row.get("address"))
         if arcgis:
             raw_county = arcgis.get("COUNTY")
-            map_ = arcgis.get("Map") or row.get("tax_map")
-            parcel = arcgis.get("Parcel") or row.get("tax_parcel")
+            # Prefer the row's own already-parsed tax map/parcel (captured
+            # directly from the auctioneer's own listing text for THIS
+            # specific parcel -- see parsing_utils.parse_tax_reference) over
+            # the ArcGIS point lookup's guess. This matters most for
+            # multi-parcel auctions (common/bidwrangler.py's
+            # build_multi_parcel_row): every parcel in one auction shares the
+            # SAME auction-level lat/lng, since individual per-parcel
+            # coordinates usually aren't available -- so an ArcGIS point
+            # lookup can resolve several genuinely different parcels to the
+            # same nearby record. Confirmed in production 2026-09-07: two
+            # distinct land tracts from one auction (tax parcels 33 and 33.4)
+            # both got matched to one shared house record via this path when
+            # the ArcGIS guess was allowed to override the already-correct
+            # per-parcel tax reference.
+            map_ = row.get("tax_map") or arcgis.get("Map")
+            parcel = row.get("tax_parcel") or arcgis.get("Parcel")
 
     if not map_:
         map_ = row.get("tax_map")
