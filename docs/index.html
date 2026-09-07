@@ -268,7 +268,7 @@ function renderRecent(){
     <div class="meta">Local comparison set: ${vals.length} sale${vals.length===1?"":"s"}</div>
   </div>
   <div class="marketpos"><div class="marketlabel">${label}</div><div class="marketdesc">${desc}</div></div>
-  <div style="margin-top:10px;display:flex;gap:8px">${r.source_url?`<a class="linkbtn" href="${r.source_url}" target="_blank" rel="noopener">View Pyle Result</a>`:""}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Open on Zillow</a></div>`;
+  <div style="margin-top:10px;display:flex;gap:8px">${r.source_url?`<a class="linkbtn" href="${r.source_url}" target="_blank" rel="noopener">View Pyle Result</a>`:""}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener" title="Opens a Zillow search for this address. Zillow's own listing (if any) is independent of our data and may show a different price, size, or status.">Search Zillow (unverified)</a></div>`;
   recentGrid.appendChild(div);
  });
 }
@@ -382,7 +382,7 @@ function renderEvaluator(vals){
   div.innerHTML=`<div class="comptitle">${[r.address,r.city].filter(Boolean).join(", ")}</div><div class="meta">${r.auction_date||""} · ${r.property_type||""}</div><div class="price">${money(r.published_final_sold_price)}</div>
   <div class="county"><div class="meta">Sq Ft: ${Number(r.comp_sqft).toLocaleString()}</div><div class="meta">Auction PPSF: $${p.toFixed(2)}</div><div class="meta">Size difference: ${r.sizeDiff===null?"Not calculated":Math.round(r.sizeDiff*100)+"%"}</div><div class="meta">Source: ${r.comp_sqft_source||""}</div></div>
   <div class="marketpos"><div class="marketlabel">${label}</div><div class="marketdesc">${desc}</div></div>
-  <div style="margin-top:10px;display:flex;gap:8px">${r.source_url?`<a class="linkbtn" href="${r.source_url}" target="_blank" rel="noopener">View Pyle Result</a>`:""}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Open on Zillow</a></div>`;
+  <div style="margin-top:10px;display:flex;gap:8px">${r.source_url?`<a class="linkbtn" href="${r.source_url}" target="_blank" rel="noopener">View Pyle Result</a>`:""}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener" title="Opens a Zillow search for this address. Zillow's own listing (if any) is independent of our data and may show a different price, size, or status.">Search Zillow (unverified)</a></div>`;
   compareGrid.appendChild(div);
  });
 }
@@ -407,7 +407,7 @@ function renderUnsold(){
  rows.forEach(r=>{
   const tr=document.createElement("tr");
   const pyleLink=r.bid_source_url?`<a class="linkbtn" href="${r.bid_source_url}" target="_blank" rel="noopener">Pyle</a>`:"";
-  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||r.title||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.property_type||""}</td><td><span class="tag">${r.final_status||""}</span></td><td>${r.final_status_reason||""}</td><td style="display:flex;gap:6px">${pyleLink}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Zillow</a></td>`;
+  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||r.title||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.property_type||""}</td><td><span class="tag">${r.final_status||""}</span></td><td>${r.final_status_reason||""}</td><td style="display:flex;gap:6px">${pyleLink}<a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener" title="Opens a Zillow search for this address. Zillow's own listing (if any) is independent of our data and may differ.">Zillow search</a></td>`;
   unsoldRows.appendChild(tr);
  });
 }
@@ -420,7 +420,7 @@ function renderReview(){
  if(!flagged.length){reviewRows.innerHTML='<tr><td colspan="7" class="small">Nothing needs review right now.</td></tr>';return;}
  flagged.forEach(r=>{
   const tr=document.createElement("tr");
-  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.property_type||""}</td><td>${r.review_reason||""}</td><td><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener">Zillow</a></td>`;
+  tr.innerHTML=`<td>${r.auction_date||""}</td><td>${r.address||""}</td><td>${r.city||""}</td><td>${r.state||""}</td><td>${r.property_type||""}</td><td>${r.review_reason||""}</td><td><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener" title="Opens a Zillow search for this address. Zillow's own listing (if any) is independent of our data and may differ.">Zillow search</a></td>`;
   reviewRows.appendChild(tr);
  });
 }
