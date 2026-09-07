@@ -333,6 +333,23 @@ def run():
         # parcels that are still active/unresolved.
         for key in graduated_parcel_keys:
             supabase_client.delete_eq("watch_auctions", "parcel_key", key)
+        # Same stale-single-lot cleanup scrape_past_sales.py does for its own
+        # discovery path: an auction that graduates here as multi-parcel for
+        # the first time can still have an OLD past_auctions row keyed by the
+        # bare source_url (single-lot shape, from before multi-parcel support
+        # or before this auction's naming matched it) -- that row is now
+        # superseded by the per-parcel #1/#2/... rows just upserted above, so
+        # remove it. This path can graduate an auction to Sold before
+        # /results ever lists it, so scrape_past_sales.py's own cleanup can't
+        # be relied on to catch every case. Only for genuinely multi-parcel
+        # sold rows (parcel_key != source_url) -- for an ordinary single-lot
+        # sale parcel_key IS the source_url, and deleting by source_url there
+        # would delete the row that was just upserted.
+        multi_parcel_sold_source_urls = {
+            r["source_url"] for r in sold_rows if r["parcel_key"] != r["source_url"]
+        }
+        for source_url in multi_parcel_sold_source_urls:
+            supabase_client.delete_eq("past_auctions", "parcel_key", source_url)
 
     # Stale-parcel cleanup: for every auction we resolved this run, delete any
     # watch_auctions row still sitting under that same source_url whose
