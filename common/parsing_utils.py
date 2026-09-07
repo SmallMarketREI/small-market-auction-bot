@@ -88,7 +88,11 @@ def parse_acreage_from_text(text: str):
     square footage, so the dashboard can fall back to a $/acre figure."""
     if not text:
         return None
-    m = re.search(r"([\d,]{1,6}\.?\d*)\s*\+?/?-?\s*acres?\b", text, re.IGNORECASE)
+    # Pyle's own listings write the +/- tolerance both ways -- literal
+    # "+/-" and the unicode "±" (confirmed live 2026-09-07: "27.16± Assessed
+    # Acres" used only the unicode form, which the old plain-ASCII pattern
+    # never matched, silently leaving a clearly-stated acreage as None.
+    m = re.search(r"([\d,]{1,6}\.?\d*)\s*(?:\+/-|±)?\s*acres?\b", text, re.IGNORECASE)
     if not m:
         return None
     try:
