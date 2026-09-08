@@ -34,6 +34,15 @@ jobs:
         id: watch_bids
         run: python scrape_watch_bids.py
 
+      - name: Geocode addresses missing lat/lng
+        id: geocoding
+        # Runs before sqft enrichment on purpose -- WV Assessment matching
+        # needs a lat/lng to search with, so a row geocoded this run is
+        # eligible for enrichment in the very same run. Never fails the job
+        # -- an address that can't be geocoded (e.g. vacant land with no
+        # real house number) is expected, not a pipeline error.
+        run: python geocode_addresses.py
+
       - name: Enrich square footage from WV Assessment
         id: sqft_enrichment
         # Never fails the job -- unresolved parcels are normal and get flagged
