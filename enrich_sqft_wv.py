@@ -162,13 +162,28 @@ def resolve_one(session, row):
 
     if not detail.get("comp_sqft"):
         reason = f"Matched parcel {detail.get('parcel_id_formatted') or root_pid}, but it has no recorded structure area"
+        # A missing structure area is only worth a human's time when the listing itself
+        # said this should have one. Land is expected to have no structure -- that's not
+        # a gap, it's the correct answer. Mobile homes are routinely assessed separately
+        # from the land parcel in WV county records, so "no structure" there is common
+        # and not a data problem either. Confirmed against production data 2026-09-08:
+        # of 57 "no recorded structure area" rows, only House/Commercial listings turned
+        # out to be genuine gaps worth a look -- Land and Mobile Home were consistently
+        # the expected, correct outcome.
+        needs_review = row.get("property_type") in ("House", "Commercial")
+        # If some other source (the auctioneer's own listing, a client-provided list,
+        # etc.) already gave this row a usable comp_sqft, WV Assessment separately
+        # failing to verify it isn't a reason to flag it either -- we already have a
+        # number, it just isn't county-verified.
+        if row.get("comp_sqft"):
+            needs_review = False
         return {
-            "review_flag": True,
-            "review_reason": reason,
+            "review_flag": needs_review,
+            "review_reason": reason if needs_review else None,
             "tax_county": county_name,
             "property_class": property_class,
             **comp_extra_fields,
-        }, reason
+        }, (reason if needs_review else None)
 
     fields = {
         "comp_sqft": detail["comp_sqft"],
