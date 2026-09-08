@@ -244,13 +244,86 @@ def select_best_match(results, parcel=None, district=None, acreage=None):
     return max(results, key=_score)
 
 
+def _parse_money(value):
+    """'$91,900' -> 91900.0, '---' / '' / None -> None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text in ("---", "-", "N/A"):
+        return None
+    try:
+        return float(text.replace("$", "").replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_int(value):
+    parsed = _parse_money(value)
+    return int(parsed) if parsed is not None else None
+
+
+def _table_with_header(soup, *required_substrings):
+    """First <table> whose header row's text contains every given substring."""
+    for table in soup.find_all("table"):
+        header_row = table.find("tr")
+        if not header_row:
+            continue
+        header_text = header_row.get_text(" ", strip=True)
+        if all(s in header_text for s in required_substrings):
+            return table
+    return None
+
+
+def _table_data_rows(table):
+    """[{header: cell_text, ...}, ...] for every row after the header row."""
+    rows = table.find_all("tr")
+    if len(rows) < 2:
+        return []
+    headers = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+    out = []
+    for tr in rows[1:]:
+        cells = tr.find_all(["td", "th"])
+        if not cells:
+            continue
+        out.append({headers[i]: cells[i].get_text(strip=True) for i in range(min(len(headers), len(cells)))})
+    return out
+
+
+def _parse_paired_value_table(table):
+    """The 'Cost Value / Appraisal Value' table is laid out as two label:value
+    pairs side by side per row (4 cells: label, value, label, value), not a
+    plain header+rows grid -- e.g. one row reads
+    'Dwelling Value | $66,400 | Land Appraisal | $25,500'. Flatten both pairs
+    from every row after the header into one label -> value dict."""
+    out = {}
+    rows = table.find_all("tr")
+    for tr in rows[1:]:
+        cells = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+        if len(cells) >= 2 and cells[0]:
+            out[cells[0]] = cells[1]
+        if len(cells) >= 4 and cells[2]:
+            out[cells[2]] = cells[3]
+    return out
+
+
 def get_assessment_detail(session: requests.Session, root_pid: str):
     """Fetch mapwv.gov/Assessment/Detail/?PID=... and pull out the fields we
-    care about. Returns a dict; comp_sqft is None if not found on the page."""
+    care about. Returns a dict; comp_sqft (and every other value field) is
+    None if not present on the page -- e.g. a vacant-land parcel has no
+    building cards at all, so year_built/bedrooms/baths stay None, but its
+    Deeded Acres and Land Appraisal are still there and still worth capturing.
+
+    Confirmed live 2026-09-08 against both a residential parcel (Kanawha
+    20-19-004G-0071-0000, 1 building) and a vacant-land parcel (Raleigh
+    41-07-0001-0020-0000, 0 buildings) -- same table layout in both cases,
+    just with empty/zeroed building fields on the land one.
+    """
     resp = session.get(ASSESSMENT_DETAIL_URL, params={"PID": root_pid}, timeout=20)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
 
+    # Plain 2-cell label:value rows, scattered across several tables
+    # (Property Location, Building Information summary, etc).
     labels = {}
     for table in soup.find_all("table"):
         for tr in table.find_all("tr"):
@@ -268,30 +341,63 @@ def get_assessment_detail(session: requests.Session, root_pid: str):
         except ValueError:
             sqft = None
 
+    # "General Information" table: Tax Class / Book-Page / Deeded Acres /
+    # Calculated Acres / Legal Description -- one header row, one data row.
+    deeded_acres = calculated_acres = None
+    general_table = _table_with_header(soup, "Deeded Acres")
+    general_rows = _table_data_rows(general_table) if general_table else []
+    if general_rows:
+        deeded_acres = _parse_money(general_rows[0].get("Deeded Acres"))
+        calculated_acres = _parse_money(general_rows[0].get("Calculated Acres"))
+
+    # "Cost Value / Appraisal Value" table -- see _parse_paired_value_table.
+    land_value = building_value = total_appraisal = None
+    appraisal_table = _table_with_header(soup, "Appraisal Value")
+    if appraisal_table:
+        appraisal = _parse_paired_value_table(appraisal_table)
+        land_value = _parse_money(appraisal.get("Land Appraisal"))
+        building_value = _parse_money(appraisal.get("Building Appraisal"))
+        total_appraisal = _parse_money(appraisal.get("Total Appraisal"))
+
     if sqft is None:
         # Fallback: sum the "Square Footage (SFLA)" column across the
         # per-building "Card" table(s) if the summary label wasn't present.
-        for table in soup.find_all("table"):
-            header_text = table.find("tr")
-            if header_text and "Square Footage (SFLA)" in header_text.get_text():
-                idx = None
-                header_cells = [c.get_text(strip=True) for c in header_text.find_all(["th", "td"])]
-                if "Square Footage (SFLA)" in header_cells:
-                    idx = header_cells.index("Square Footage (SFLA)")
-                if idx is not None:
-                    total = 0.0
-                    found_any = False
-                    for tr in table.find_all("tr")[1:]:
-                        cells = tr.find_all(["td", "th"])
-                        if len(cells) > idx:
-                            try:
-                                total += float(cells[idx].get_text(strip=True).replace(",", ""))
-                                found_any = True
-                            except ValueError:
-                                pass
-                    if found_any:
-                        sqft = total
-                break
+        sqft_table = _table_with_header(soup, "Square Footage (SFLA)")
+        if sqft_table:
+            total = 0.0
+            found_any = False
+            for row in _table_data_rows(sqft_table):
+                val = _parse_money(row.get("Square Footage (SFLA)"))
+                if val is not None:
+                    total += val
+                    found_any = True
+            if found_any:
+                sqft = total
+
+    # Per-building "Card" table with Year Built / Bedrooms / Full Baths /
+    # Half Baths -- one row per building. A multi-building parcel (a house
+    # plus a converted garage apartment, say) gets summed bedrooms/baths and
+    # the EARLIEST year_built across cards, on the theory that the original
+    # structure's construction year is the more useful comp figure than
+    # whichever card happens to list last. Absent entirely (0 buildings, e.g.
+    # vacant land) -> all three stay None rather than 0, so they read as "not
+    # on record" rather than "confirmed zero bedrooms".
+    year_built = bedrooms = full_baths = half_baths = None
+    card_table = _table_with_header(soup, "Bedrooms", "Full Baths")
+    card_rows = _table_data_rows(card_table) if card_table else []
+    if card_rows:
+        years = [y for y in (_parse_int(r.get("Year Built")) for r in card_rows) if y]
+        if years:
+            year_built = min(years)
+        bed_vals = [b for b in (_parse_int(r.get("Bedrooms")) for r in card_rows) if b is not None]
+        if bed_vals:
+            bedrooms = sum(bed_vals)
+        full_vals = [b for b in (_parse_int(r.get("Full Baths")) for r in card_rows) if b is not None]
+        if full_vals:
+            full_baths = sum(full_vals)
+        half_vals = [b for b in (_parse_int(r.get("Half Baths")) for r in card_rows) if b is not None]
+        if half_vals:
+            half_baths = sum(half_vals)
 
     return {
         "root_pid": root_pid,
@@ -299,10 +405,18 @@ def get_assessment_detail(session: requests.Session, root_pid: str):
         "physical_address": labels.get("Physical Address"),
         "owner": labels.get("Owner(s)"),
         "comp_sqft": sqft,
-        "total_appraisal": labels.get("Total Appraisal"),
         # e.g. "R-Residential", "X-Exempt", "C-Commercial" -- used to flag a
         # matched parcel that doesn't actually look like the home the auction
         # was for (see enrich_sqft_wv.py's review_reason logic).
         "property_class": labels.get("Property Class"),
+        "deeded_acres": deeded_acres,
+        "calculated_acres": calculated_acres,
+        "land_value": land_value,
+        "building_value": building_value,
+        "total_appraisal": total_appraisal,
+        "year_built": year_built,
+        "bedrooms": bedrooms,
+        "full_baths": full_baths,
+        "half_baths": half_baths,
         "source_url": f"{ASSESSMENT_DETAIL_URL}?PID={root_pid}",
     }
