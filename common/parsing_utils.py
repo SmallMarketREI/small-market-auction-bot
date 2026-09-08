@@ -112,13 +112,17 @@ _SUBJECT_PREFIX_RE = re.compile(
     r"^subject\s*#?\s*[a-z0-9]{1,12}\s*:\s*",
     re.IGNORECASE,
 )
-# Matches "<street/area>, <city>, ST [ZIP]" allowing a comma, hyphen, or en/em
-# dash as the street/city separator, since Pyle's own listings use all three
-# inconsistently (observed live: "Big Ugly Rd E, Harts, WV 25524",
+# Matches "<street/area>, <city>, ST [, ZIP]" allowing a comma, hyphen, or
+# en/em dash as the street/city separator, since Pyle's own listings use all
+# three inconsistently (observed live: "Big Ugly Rd E, Harts, WV 25524",
 # "261 Ronda Road - Dry Branch, WV 25061", "Bufflick Run- Clendenin, WV").
+# The comma before the zip is also optional -- confirmed live: "2018 1/2 2nd
+# Street, Moundsville, WV, 26041" and "670 Walker Ridge Rd, Walton, WV,
+# 25286" both punctuate the zip like a fourth list item rather than just
+# trailing whitespace-separated, which the old \s*zip$ tail never matched.
 _TRAILING_CITY_STATE_ZIP_RE = re.compile(
     r"^(?P<street>.*?)[,\-–—]\s*(?P<city>[A-Za-z .]+?),?\s*"
-    r"(?P<state>WV|PA|OH|KY|VA|MD)\b\s*(?P<zip>\d{4,5})?\s*$"
+    r"(?P<state>WV|PA|OH|KY|VA|MD)\b,?\s*(?P<zip>\d{4,5})?\s*$"
 )
 # Fallback for when the address is buried in the item's DESCRIPTION rather
 # than its name (observed live: item name "Subject #4: Stone Commercial
@@ -131,6 +135,188 @@ _DESC_ADDRESS_RE = re.compile(
 )
 _BUNDLE_NAME_RE = re.compile(r"propert(?:y|ies)\s+in\s+entiret", re.IGNORECASE)
 _MINERAL_NAME_RE = re.compile(r"mineral\s+interests?", re.IGNORECASE)
+
+# Town names this auctioneer's listings have already resolved to, mapped to
+# their state -- used ONLY to find the street/city boundary in a run-on name
+# with no separator at all (e.g. "1323 Adams Avenue Clarksburg, WV"), or a
+# trailing city with no state code at all (e.g. "105 Lavender Street- Oak
+# Hill"). Regex alone can't place that boundary safely: any purely
+# punctuation-driven split guesses wrong on a multi-word town name (observed
+# live in this auctioneer's own area -- "South Charleston", "Cross Lanes",
+# "St. Albans" would each get cut in half, e.g. "...Avenue South" /
+# "Charleston" instead of "...Avenue" / "South Charleston"). Matching
+# against a real, already-seen place name instead of guessing is what keeps
+# this safe -- confirmed 2026-09-08 against every known live example of
+# this bug shape.
+#
+# Sourced from every already-resolved (city, state) pair actually sitting in
+# past_auctions/watch_auctions today (2026-09-08 snapshot), which is why the
+# state isn't just assumed to be WV -- this auctioneer does occasionally
+# list PA/KY/VA/MD/OH properties near the state line, and a handful of town
+# names are only ever seen there ("Uniontown" -> PA, "Ashland" -> KY,
+# "Roanoke" -> VA, "Oakland" -> MD, "Portsmouth" -> OH -- all confirmed,
+# never WV, in this account's own history). A town name whose OWN history
+# has appeared under more than one state ("Washington" -- both WV and PA)
+# is deliberately left out rather than guessed. A few real WV town names
+# with no prior successful parse yet were manually confirmed and added
+# during this same investigation (Summersville, Nutter Fort, West Logan,
+# Smithers) after turning up run-on in live listing text with no ambiguity
+# risk -- flagged inline below rather than mixed in silently.
+_KNOWN_CITY_STATE = {
+    "Advent": "WV", "Alderson": "WV", "Alum Bridge": "WV", "Alum Creek": "WV",
+    "Amherstdale": "WV", "Amigo": "WV", "Amma": "WV", "Arnoldsburg": "WV",
+    "Ashland": "KY", "Aurora": "WV", "Bancroft": "WV", "Barboursville": "WV",
+    "Beckley": "WV", "Belle": "WV", "Belleville": "WV", "Benwood": "WV",
+    "Big Creek": "WV", "Blacksville": "WV", "Blount": "WV", "Bluefield": "WV",
+    "Branchland": "WV", "Bridgeport": "WV", "Bruceton Mills": "WV", "Buckhannon": "WV",
+    "Buffalo": "WV", "Canvas": "WV", "Cedar Grove": "WV", "Chapmanville": "WV",
+    "Charleston": "WV", "Chelyan": "WV", "Chesapeake": "WV", "Clarksburg": "WV",
+    "Clarksville": "PA", "Clendenin": "WV", "Coalton": "WV", "Connellsville": "PA",
+    "Cowen": "WV", "Cross Lanes": "WV", "Culloden": "WV", "Daniels": "WV",
+    "Delbarton": "WV", "Dry Branch": "WV", "Drybranch": "WV", "Dunbar": "WV",
+    "Dunmore": "WV", "East Bank": "WV", "Eccles": "WV", "Elkview": "WV",
+    "Eskdale": "WV", "Fairchance": "PA", "Fairmont": "WV", "Fairview": "WV",
+    "Farmington": "WV", "Fayettevillle": "WV", "Fort Gay": "WV", "Friendly": "WV",
+    "Gilbert": "WV", "Glasgow": "WV", "Glen": "WV", "Glenwood": "WV",
+    "Grafton": "WV", "Grant Town": "WV", "Grayson": "KY", "Harts": "WV",
+    "Hedgesville": "WV", "Hilton Village": "WV", "Huntington": "WV", "Hurricane": "WV",
+    "Inez": "KY", "Jolo": "WV", "Josephine": "WV", "Julian": "WV",
+    "Kanawha City": "WV", "Kermit": "WV", "Kimberly": "WV", "Kingwood": "WV",
+    "Lavalette": "WV", "Left Hand": "WV", "Leon": "WV", "Letart": "WV",
+    "Logan": "WV", "London": "WV", "Lumberport": "WV", "Maidsville": "WV",
+    "Mannington": "WV", "Marmet": "WV", "Martinsburg": "WV", "Matewan": "WV",
+    "McGraw": "WV", "Miami": "WV", "Midway": "WV", "Milton": "WV",
+    "Monongah": "WV", "Monterville": "WV", "Montgomery": "WV", "Morgantown": "WV",
+    "Moundsville": "WV", "Mount Clare": "WV", "Mt Hope": "WV", "Mt. Hope": "WV",
+    "Mullens": "WV", "Nettie": "WV", "Newberg": "WV", "Nitro": "WV",
+    "Nutter Fort": "WV",  # manually confirmed 2026-09-08, see block comment above
+    "Oak Hill": "WV", "Oakland": "MD", "Ona": "WV", "Orgas": "WV",
+    "Paden City": "WV", "Parkersburg": "WV", "Parsons": "WV", "Petersburg": "WV",
+    "Philippi": "WV", "Poca": "WV", "Portsmouth": "OH", "Prichard": "WV",
+    "Princewick": "WV", "Pullman": "WV", "Red House": "WV", "Rhodell": "WV",
+    "Richmond": "KY", "Ridgeview": "WV", "Ripley": "WV", "Rivesville": "WV",
+    "Roanoke": "VA", "Rowlesburg": "WV", "Saint Albans": "WV", "Salem": "WV",
+    "Salt Rock": "WV", "Scott Depot": "WV", "Seneca Rocks": "WV", "Shinnston": "WV",
+    "Sistersville": "WV",
+    "Smithers": "WV",  # manually confirmed 2026-09-08, see block comment above
+    "Smithfield": "WV", "Sophia": "WV", "South Charleston": "WV", "Spelter": "WV",
+    "Spencer": "WV", "St. Albans": "WV", "Stonewood": "WV",
+    "Summersville": "WV",  # manually confirmed 2026-09-08, see block comment above
+    "Terra Alta": "WV", "Thomas": "WV", "Tornado": "WV", "Tunnelton": "WV",
+    "Uniontown": "PA", "Vienna": "WV", "Walker": "WV", "Wallace": "WV",
+    "Waynesburg": "PA", "Welch": "WV",
+    "West Logan": "WV",  # manually confirmed 2026-09-08, see block comment above
+    "Weston": "WV", "Wheeling": "WV", "Whitesville": "WV", "Williamson": "WV",
+    "Winfield": "WV", "Worthington": "WV",
+}
+# Longest first (by word count, then character count) so a multi-word name
+# is tried -- and wins -- before any single-word name it happens to contain
+# ("South Charleston" before "Charleston").
+_KNOWN_CITIES_BY_LENGTH = sorted(_KNOWN_CITY_STATE, key=lambda c: (-c.count(" "), -len(c)))
+_STATE_CODE_RE = re.compile(r"\b(WV|PA|OH|KY|VA|MD)\b")
+
+
+def _match_run_on_known_city(text: str):
+    """Best-effort street/city split for a run-on address with no separator
+    ("1323 Adams Avenue Clarksburg, WV") -- returns the usual dict shape, or
+    None if no known city name lines up right before a state code. Never
+    guesses a street/city boundary from punctuation alone (see
+    _KNOWN_CITY_STATE's docstring for why that's unsafe). Trusts whatever
+    state code is actually in the text (not the known-city table) since an
+    explicitly stated state is the most reliable signal available."""
+    if not text:
+        return None
+    m = _STATE_CODE_RE.search(text)
+    if not m:
+        return None
+    prefix = text[: m.start()].rstrip(" ,-–—")
+    if not re.match(r"^\d", prefix):
+        return None  # no leading street number -- not confident this is an address at all
+    rest = text[m.end() :]
+    zip_m = re.match(r"[,\s]*(\d{4,5})?", rest)
+    zip_code = zip_m.group(1) if zip_m else None
+    lower_prefix = prefix.lower()
+    for city in _KNOWN_CITIES_BY_LENGTH:
+        if lower_prefix.endswith(city.lower()):
+            street = prefix[: len(prefix) - len(city)].rstrip(" ,-–—")
+            if street:
+                return {
+                    "address": street,
+                    "city": city,
+                    "state": m.group(1),
+                    "zip": zip_code,
+                    "confident": True,
+                }
+    return None
+
+
+def _match_trailing_known_city_no_state(text: str):
+    """Same idea as _match_run_on_known_city, for the case where the state
+    code is missing from the text entirely -- observed live 2026-09-08 as
+    this auctioneer's other common shorthand: "<street>- <City>" or
+    "<street> <City>" with no state anywhere in the item name (e.g. "105
+    Lavender Street- Oak Hill", "16 Wilson Street Smithers"). Only ever
+    returns a match when the trailing text is an EXACT known city name (see
+    _KNOWN_CITY_STATE's docstring) sitting at the very end of the string --
+    the state then comes from that same already-verified table, never
+    assumed. A trailing word that isn't a recognized city (or isn't at the
+    very end) returns None rather than guessing."""
+    if not text:
+        return None
+    stripped = text.rstrip(" .")
+    lower = stripped.lower()
+    for city in _KNOWN_CITIES_BY_LENGTH:
+        if lower.endswith(city.lower()):
+            prefix = stripped[: len(stripped) - len(city)].rstrip(" ,-–—")
+            if not re.match(r"^\d", prefix):
+                continue  # no leading street number -- not confident this is an address
+            # Reject if there's still a lowercase word butted right up
+            # against the city with no separator at all (e.g. "...Avenuecity")
+            # -- rstrip above only trims actual separator characters, so a
+            # genuine run-on-with-no-space case is correctly left unmatched
+            # rather than guessed.
+            if prefix and stripped[len(prefix)] not in " ,-–—":
+                continue
+            return {
+                "address": prefix,
+                "city": city,
+                "state": _KNOWN_CITY_STATE[city],
+                "zip": None,
+                "confident": True,
+            }
+    return None
+
+
+def _match_via_auction_title(item_text: str, auction_title: str):
+    """Last-resort fallback for a multi-parcel item whose OWN name/description
+    has a real street address but no city/state anywhere in it at all
+    (observed live 2026-09-08: a 16-parcel auction titled "16 Uniontown
+    Investment Properties" where every single item is just "130 Walnut
+    Street", "68 Millview Street", etc. -- no city, on any item, anywhere).
+    Only fires when item_text itself looks like a real street (leading
+    digit) and the auction's own title contains one whole, exact known city
+    name (see _KNOWN_CITY_STATE's docstring) -- e.g. "Uniontown" in that
+    title, which this account's own history confirms is always Uniontown,
+    PA, never a WV town of the same name. This is deliberately narrow: it
+    does NOT scan free-text listing descriptions for an incidental city
+    mention (a description can say "minutes from Huntington" about a
+    property that isn't actually in Huntington -- an auction's own title
+    naming the properties' shared location is a much stronger signal)."""
+    if not item_text or not auction_title:
+        return None
+    if not re.match(r"^\d", item_text.strip()):
+        return None
+    lower_title = f" {auction_title.lower()} "
+    for city in _KNOWN_CITIES_BY_LENGTH:
+        if re.search(r"[^a-z]" + re.escape(city.lower()) + r"[^a-z]", lower_title):
+            return {
+                "address": item_text.strip(),
+                "city": city,
+                "state": _KNOWN_CITY_STATE[city],
+                "zip": None,
+                "confident": True,
+            }
+    return None
 
 
 def is_subject_item_name(name: str) -> bool:
@@ -154,7 +340,7 @@ def is_mineral_interest_item_name(name: str) -> bool:
     return bool(name and _MINERAL_NAME_RE.search(name))
 
 
-def parse_subject_address(item_name: str, item_description: str = None):
+def parse_subject_address(item_name: str, item_description: str = None, auction_title: str = None):
     """Best-effort address/city/state/zip for one parcel in a multi-parcel
     auction (a BidWrangler item named like 'Subject Two: 261 Ronda Road -
     Dry Branch, WV 25061'). Returns a dict:
@@ -165,6 +351,11 @@ def parse_subject_address(item_name: str, item_description: str = None):
     dropped -- but confident=False means the city/state/zip split is
     unverified and the caller should flag the row for review instead of
     trusting it blindly, per "Needs Review instead of guessing."
+
+    auction_title is optional -- the auction's own top-level name (e.g. "16
+    Uniontown Investment Properties") -- used only as the very last resort
+    when nothing in the item's own name/description gives a city at all; see
+    _match_via_auction_title's docstring for why this is safe and narrow.
     """
     raw = (item_name or "").strip()
     stripped = _SUBJECT_PREFIX_RE.sub("", raw).strip()
@@ -190,6 +381,23 @@ def parse_subject_address(item_name: str, item_description: str = None):
                 "confident": True,
             }
 
+    # The name has a street number run straight into the city with no
+    # separator at all (see _KNOWN_CITY_STATE's docstring) -- try matching
+    # against a real, already-seen town name before giving up on it. This is
+    # deliberately NOT a regex guess (an earlier attempt using a
+    # street/city-splitting regex here passed ad-hoc tests but silently
+    # mis-split multi-word town names like "South Charleston" -- see
+    # _match_run_on_known_city's docstring).
+    m1b = _match_run_on_known_city(stripped)
+    if m1b:
+        return m1b
+
+    # Same idea, but the state code is missing entirely -- this
+    # auctioneer's other common shorthand ("<street>- <City>", no state).
+    m1c = _match_trailing_known_city_no_state(stripped)
+    if m1c:
+        return m1c
+
     # Address wasn't in the name -- try the description (observed live: see
     # _DESC_ADDRESS_RE docstring above).
     m2 = _DESC_ADDRESS_RE.search(item_description or "")
@@ -201,6 +409,18 @@ def parse_subject_address(item_name: str, item_description: str = None):
             "zip": m2.group("zip"),
             "confident": True,
         }
+
+    # Same no-state shorthand can also show up only in the description.
+    m2b = _match_trailing_known_city_no_state((item_description or "").strip())
+    if m2b:
+        return m2b
+
+    # Last resort: the item itself has a real street number but genuinely no
+    # city anywhere in its own text -- fall back to the auction's own title,
+    # if one was given (see _match_via_auction_title's docstring).
+    m3 = _match_via_auction_title(stripped, auction_title)
+    if m3:
+        return m3
 
     # Nothing parseable -- keep the raw (prefix-stripped) text as the best
     # available label rather than dropping the row, but mark it unconfident
