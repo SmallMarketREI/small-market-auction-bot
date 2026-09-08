@@ -392,21 +392,54 @@ def test_parse_subject_address_run_on_name_flags_review_instead_of_blank_city():
     separator before the city (e.g. '1323 Adams Avenue Clarksburg, WV', vs.
     the usual 'Street – City, WV') let the trailing-city regex backtrack its
     whitespace into the city group, returning confident=True with a blank
-    city and the city silently folded into the address. Must fall through to
-    the not-confident case instead so the row gets flagged for review."""
+    city and the city silently folded into the address.
+
+    Original fix (2026-09-07) made this fall through to not-confident.
+    Follow-up fix (2026-09-08): once WV Assessment enrichment failures on
+    exactly this address shape turned up as a real, recurring gap (38
+    past_auctions rows), a safer targeted fix was added --
+    _match_run_on_known_city() -- that only splits a run-on name when the
+    text right before the state code exactly matches a town name already
+    seen (and trusted) elsewhere in this auctioneer's own data. "Clarksburg"
+    is one of those known towns, so this exact input should now resolve
+    confidently and correctly instead of just being flagged. The unsafe
+    part of the original bug -- guessing a street/city boundary from
+    punctuation alone for a town this hasn't seen before -- is covered by
+    the unknown-city case below instead."""
     addr = parsing_utils.parse_subject_address(
         "Subject 1: 1323 Adams Avenue Clarksburg, WV",
         "1.053 +/- Total SF 0.08 +/- Acres (as assessed) Ranch Style 3 Bedroom",
     )
-    assert addr["confident"] is False, addr
-    assert addr["city"] is None, addr
-    assert addr["address"], addr  # still keeps the raw text, just unconfident
+    assert addr["confident"] is True, addr
+    assert addr["city"] == "Clarksburg", addr
+    assert addr["address"] == "1323 Adams Avenue", addr
+
+    # A run-on name whose "city" is NOT a known town must still fall through
+    # to the not-confident case rather than guess a punctuation-based split
+    # -- this is the actual unsafe behavior the original bug report covered.
+    addr_unknown = parsing_utils.parse_subject_address(
+        "Subject 1: 1323 Adams Avenue Notarealplacetown, WV",
+        "1.053 +/- Total SF 0.08 +/- Acres (as assessed) Ranch Style 3 Bedroom",
+    )
+    assert addr_unknown["confident"] is False, addr_unknown
+    assert addr_unknown["city"] is None, addr_unknown
+    assert addr_unknown["address"], addr_unknown  # still keeps the raw text, just unconfident
+
+    # Multi-word known town names must win over a single-word name they
+    # contain (e.g. "South Charleston" must not get cut down to just
+    # "Charleston", stranding "South" on the street side).
+    addr_multi = parsing_utils.parse_subject_address(
+        "Subject 1: 1323 Adams Avenue South Charleston, WV",
+    )
+    assert addr_multi["confident"] is True, addr_multi
+    assert addr_multi["city"] == "South Charleston", addr_multi
+    assert addr_multi["address"] == "1323 Adams Avenue", addr_multi
 
     # Sanity: the normal dash-separated case still parses confidently.
     addr2 = parsing_utils.parse_subject_address("Subject Two: 261 Ronda Road - Dry Branch, WV 25061")
     assert addr2["confident"] is True and addr2["city"] == "Dry Branch", addr2
-    print("OK: parse_subject_address flags a run-on 'street city, state' name for review instead "
-          "of returning a confidently-wrong blank city")
+    print("OK: parse_subject_address safely splits a run-on 'street city, state' name only when "
+          "the city is a known town, and still flags unknown-town run-ons for review")
 
 
 def test_scrape_watch_bids_multi_parcel_lifecycle():
@@ -434,6 +467,52 @@ def test_scrape_watch_bids_multi_parcel_lifecycle():
           "independently (sold/active/unsold simultaneously from one auction page)")
 
 
+def test_select_best_match_disambiguates_sibling_subparcels():
+    """Real production data, captured live 2026-09-07: WV Assessment's own
+    search for county=24 (Marion) map=24 parcel=33 returns 13 distinct
+    properties -- every "33.0".."33.10" sub-parcel that starts with "33",
+    across 3 different districts -- because the site's search matches on a
+    numeric prefix, not an exact parcel number. Auction 166348's "27.16+/-
+    Acres" tract (tax_district 09, tax_map 24, tax_parcel "33", acreage
+    27.16) used to resolve to whichever row the site listed first
+    (CHMELIK's unrelated $426,900 house, sub-parcel 33.5) instead of its own
+    match (BURDOFF's 27.16-acre farm tract, sub-parcel 33.0) -- confirmed on
+    the live dashboard as a wrong shared square footage on both of that
+    auction's land parcels."""
+    results = [
+        {"Root Parcel ID": "24090024003300050000", "Current Owner": "CHMELIK JONATHON F & KATHRYN N",
+         "District": "9-Grant District", "Map": "24", "Parcel": "33.5", "Deeded Acres": "1.27"},
+        {"Root Parcel ID": "24030024003300000000", "Current Owner": "PRECISION PROPERTIES LLC",
+         "District": "3-Fairmont Corp", "Map": "24", "Parcel": "33.0", "Deeded Acres": "0.22"},
+        {"Root Parcel ID": "24090024003300000000", "Current Owner": "BURDOFF JOSEPHINE",
+         "District": "9-Grant District", "Map": "24", "Parcel": "33.0", "Deeded Acres": "27.16"},
+        {"Root Parcel ID": "24090024003300040000", "Current Owner": "VALENTINE JANIS M",
+         "District": "9-Grant District", "Map": "24", "Parcel": "33.4", "Deeded Acres": "3.54"},
+        {"Root Parcel ID": "24110024003300000000", "Current Owner": "FMT & MGTN TROLLEY LINE",
+         "District": "11-Lincoln District", "Map": "24", "Parcel": "33.0", "Deeded Acres": ""},
+    ]
+    best = wv_assessment.select_best_match(results, parcel="33", district="09", acreage=27.16)
+    assert best["Root Parcel ID"] == "24090024003300000000", best
+    assert best["Current Owner"] == "BURDOFF JOSEPHINE", best
+
+    # The sibling parcel from the same auction: exact single-result match,
+    # unaffected by the ambiguity (still must not crash / must still return it).
+    best2 = wv_assessment.select_best_match(
+        [{"Root Parcel ID": "24090024003300040000", "Parcel": "33.4", "Deeded Acres": "3.54"}],
+        parcel="33.4", district="09", acreage=3.54,
+    )
+    assert best2["Root Parcel ID"] == "24090024003300040000"
+
+    # No hints available (e.g. old rows with no acreage on file) -- must not
+    # crash, and still falls back to a same-parcel-number candidate rather
+    # than something that doesn't even match the number.
+    best3 = wv_assessment.select_best_match(results, parcel="33", district=None, acreage=None)
+    assert best3["Parcel"] == "33.0", best3
+
+    print("OK: select_best_match disambiguates sibling sub-parcels sharing one prefix by "
+          "exact parcel number, then district, then deeded acres")
+
+
 if __name__ == "__main__":
     test_summarize_auction()
     test_parse_tax_reference()
@@ -451,4 +530,5 @@ if __name__ == "__main__":
     test_is_subject_item_name_handles_numbers_past_ten()
     test_parse_subject_address_run_on_name_flags_review_instead_of_blank_city()
     test_scrape_watch_bids_multi_parcel_lifecycle()
+    test_select_best_match_disambiguates_sibling_subparcels()
     print("\nAll manual smoke tests passed.")
