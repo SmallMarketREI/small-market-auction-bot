@@ -144,6 +144,22 @@ def resolve_one(session, row):
     detail = wv_assessment.get_assessment_detail(session, root_pid)
     property_class = detail.get("property_class")
 
+    # These fields (deeded acres, land/building/total appraisal, year built,
+    # bed/bath counts) come off the same Assessment Detail page as the square
+    # footage, so capture whatever's there regardless of whether a structure
+    # was found -- a vacant-land parcel has no year_built/bedrooms, but it
+    # still has Deeded Acres and a Land Appraisal worth recording.
+    comp_extra_fields = {
+        "comp_deeded_acres": detail.get("deeded_acres"),
+        "comp_land_value": detail.get("land_value"),
+        "comp_building_value": detail.get("building_value"),
+        "comp_total_appraisal": detail.get("total_appraisal"),
+        "comp_year_built": detail.get("year_built"),
+        "comp_bedrooms": detail.get("bedrooms"),
+        "comp_full_baths": detail.get("full_baths"),
+        "comp_half_baths": detail.get("half_baths"),
+    }
+
     if not detail.get("comp_sqft"):
         reason = f"Matched parcel {detail.get('parcel_id_formatted') or root_pid}, but it has no recorded structure area"
         return {
@@ -151,6 +167,7 @@ def resolve_one(session, row):
             "review_reason": reason,
             "tax_county": county_name,
             "property_class": property_class,
+            **comp_extra_fields,
         }, reason
 
     fields = {
@@ -161,6 +178,7 @@ def resolve_one(session, row):
         "comp_sqft_note": f"Matched parcel {detail.get('parcel_id_formatted') or root_pid}.",
         "tax_county": county_name,
         "property_class": property_class,
+        **comp_extra_fields,
     }
 
     review_reason = None
@@ -202,7 +220,17 @@ def run(limit: int = None):
             fields = {"review_flag": True, "review_reason": f"Enrichment error: {e}"}
             log_reason = f"error: {e}"
 
-        supabase_client.update_by_id("past_auctions", row["id"], fields)
+        try:
+            supabase_client.update_by_id("past_auctions", row["id"], fields)
+        except Exception as e:  # noqa: BLE001
+            # A single row's write failing (e.g. a column this script expects
+            # doesn't exist yet in Supabase because the matching schema
+            # migration hasn't been run) should never take down the whole
+            # batch -- log it and keep going so every other row still gets
+            # enriched.
+            log_reason = f"write failed: {e}"
+            logged_reasons.append(f"{row.get('address')}, {row.get('city')}: {log_reason}")
+            continue
         if fields.get("comp_sqft"):
             updated += 1
         if fields.get("review_flag"):
