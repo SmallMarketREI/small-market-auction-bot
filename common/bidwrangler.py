@@ -233,19 +233,51 @@ def get_auction_detail(session: requests.Session, auction_id) -> dict:
     return resp.json()
 
 
+_REAL_ESTATE_PHRASES = (
+    "real estate", "land auction", "commercial property auction", "commercial real estate",
+)
+
+
 def is_real_estate_auction(detail: dict, summarized: dict) -> bool:
     """Confirmed 2026-09-07 via recon across ~120 currently-listed Pyle
-    auctions: every real-estate auction is single-lot (items_count == 1) and
-    its item description contains the phrase "real estate" (from the
-    auctioneer's own "ONLINE REAL ESTATE AUCTION" / "Real Estate Auction"
-    boilerplate); every personal-property auction on this account is
-    multi-lot (dozens to hundreds of items) and its first item's description
-    is just a preview-time blurb, not that phrase. Both signals together
-    avoid misclassifying a rare single-lot personal-property listing (e.g. a
-    single vehicle) as real estate."""
+    auctions: every real-estate auction is single-lot (items_count == 1);
+    every personal-property auction on this account is multi-lot (dozens to
+    hundreds of items). The items_count == 1 check alone avoids misreading a
+    rare single-lot personal-property listing (e.g. a single vehicle) as
+    real estate.
+
+    Originally this also required the item description to contain the exact
+    phrase "real estate" (from the auctioneer's "ONLINE REAL ESTATE AUCTION"
+    boilerplate). Confirmed live 2026-09-08 that this silently dropped a
+    whole category of genuine single-lot real estate listings whose own
+    boilerplate reads differently -- "Online Land Auction," "Online Absolute
+    Land Auction," "Online Commercial Property Auction" -- or that skip a
+    boilerplate header entirely and open straight with property specs (e.g.
+    "3 Bedrooms | 1.5 Bathrooms ... Built in 1945 ... District 7, Map 2C,
+    Parcel 60"). Nine currently-active real-estate auctions were being
+    missed this way at the time this was found -- mostly land, one
+    commercial, one cancelled house sale.
+
+    Now also treats a WV tax district/map/parcel reference (parsed the same
+    way enrich_sqft_wv.py and the multi-parcel path already do) as real
+    estate on its own -- that reference never appears in a personal-property
+    listing -- and falls back to "has an acreage figure AND a square-footage
+    figure together" for the rare description with neither a recognized
+    phrase nor a tax reference. A bare acreage figure alone isn't used (a
+    single vehicle or equipment description could plausibly mention acreage
+    of the property it's stored on) -- requiring both together keeps this
+    from over-matching.
+    """
     if detail.get("items_count") != 1:
         return False
-    return "real estate" in (summarized.get("description") or "").lower()
+    desc = (summarized.get("description") or "").lower()
+    if any(phrase in desc for phrase in _REAL_ESTATE_PHRASES):
+        return True
+    if parsing_utils.parse_tax_reference(desc) != (None, None, None):
+        return True
+    has_acreage = parsing_utils.parse_acreage_from_text(desc) is not None
+    has_sqft = parsing_utils.parse_sqft_from_text(desc) is not None
+    return has_acreage and has_sqft
 
 
 def build_past_auction_row(s: dict, tax_ref: tuple, stated_sqft) -> dict:
