@@ -109,7 +109,21 @@ _SUBJECT_PREFIX_RE = re.compile(
     # 16-parcel auction used "Subject Eleven:" through "Subject Seventeen:",
     # which an earlier one/two/.../ten word-list silently failed to match
     # and dropped those parcels from every downstream table entirely.
-    r"^subject\s*#?\s*[a-z0-9]{1,12}\s*:\s*",
+    #
+    # The separator after the subject number is usually a colon, but not
+    # always -- confirmed live 2026-09-08: a 4-parcel auction ("Premier
+    # Quarry Creek Building Lots") named its items "Subject One – Quarry
+    # Ridge South- Charleston, WV" (en-dash, no colon at all). Since
+    # is_multi_parcel_real_estate_auction() below counts how many items
+    # match this prefix to decide whether an auction is multi-parcel at
+    # all, missing this shape didn't just leave one parcel unconfidently
+    # parsed -- it meant NONE of that auction's items were recognized as
+    # "Subject N" items, so the whole auction was misread as a single-lot
+    # sale and only its first item ($5,000) was ever recorded, silently
+    # dropping the other three sold parcels ($21,000 + $12,000 + $33,000)
+    # entirely. Accepting a colon or a hyphen/en-dash/em-dash here fixes
+    # that at the root rather than just for this one auction.
+    r"^subject\s*#?\s*[a-z0-9]{1,12}\s*[:\-–—]\s*",
     re.IGNORECASE,
 )
 # Matches "<street/area>, <city>, ST [, ZIP]" allowing a comma, hyphen, or
@@ -120,8 +134,18 @@ _SUBJECT_PREFIX_RE = re.compile(
 # Street, Moundsville, WV, 26041" and "670 Walker Ridge Rd, Walton, WV,
 # 25286" both punctuate the zip like a fourth list item rather than just
 # trailing whitespace-separated, which the old \s*zip$ tail never matched.
+#
+# The plain hyphen alternative deliberately excludes one right after "+/"
+# (a negative lookbehind) -- confirmed live 2026-09-08: acreage figures are
+# routinely written "0.53 +/- Acres on Jerome St Morgantown, WV", and
+# without this exclusion the street group's own non-greedy match stops at
+# the FIRST hyphen it finds, which is the one inside "+/-" itself, long
+# before the real street/city separator -- producing a confidently-wrong
+# split ("0.53 +/" as the address, "Acres on Jerome St Morgantown" as the
+# city) instead of ever reaching the real separator or falling through to
+# the safer known-city matching below.
 _TRAILING_CITY_STATE_ZIP_RE = re.compile(
-    r"^(?P<street>.*?)[,\-–—]\s*(?P<city>[A-Za-z .]+?),?\s*"
+    r"^(?P<street>.*?)(?:,|–|—|(?<!\+/)-)\s*(?P<city>[A-Za-z .]+?),?\s*"
     r"(?P<state>WV|PA|OH|KY|VA|MD)\b,?\s*(?P<zip>\d{4,5})?\s*$"
 )
 # Fallback for when the address is buried in the item's DESCRIPTION rather
@@ -178,7 +202,9 @@ _KNOWN_CITY_STATE = {
     "Eskdale": "WV", "Fairchance": "PA", "Fairmont": "WV", "Fairview": "WV",
     "Farmington": "WV", "Fayettevillle": "WV", "Fort Gay": "WV", "Friendly": "WV",
     "Gilbert": "WV", "Glasgow": "WV", "Glen": "WV", "Glenwood": "WV",
-    "Grafton": "WV", "Grant Town": "WV", "Grayson": "KY", "Harts": "WV",
+    "Grafton": "WV", "Grant Town": "WV", "Grayson": "KY",
+    "Harpers Ferry": "WV",  # manually confirmed 2026-09-08, see block comment above
+    "Harts": "WV",
     "Hedgesville": "WV", "Hilton Village": "WV", "Huntington": "WV", "Hurricane": "WV",
     "Inez": "KY", "Jolo": "WV", "Josephine": "WV", "Julian": "WV",
     "Kanawha City": "WV", "Kermit": "WV", "Kimberly": "WV", "Kingwood": "WV",
