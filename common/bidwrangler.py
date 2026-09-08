@@ -369,7 +369,7 @@ def build_multi_parcel_row(s_top: dict, item: dict, parcel_index: int) -> dict:
     """
     name = item.get("name") or ""
     desc = item.get("description_without_html") or ""
-    addr = parsing_utils.parse_subject_address(name, desc)
+    addr = parsing_utils.parse_subject_address(name, desc, auction_title=s_top.get("name"))
     district, map_, parcel = parsing_utils.parse_tax_reference(desc)
     stated_sqft = parsing_utils.parse_sqft_from_text(desc)
     # Try the description first (it's usually more detailed), but fall back
