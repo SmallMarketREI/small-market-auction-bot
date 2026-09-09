@@ -128,6 +128,131 @@ def lookup_parcel_by_latlng(session: requests.Session, lat: float, lng: float, a
     return None
 
 
+_STREET_SUFFIX_WORDS = {
+    "RD", "ROAD", "DR", "DRIVE", "LN", "LANE", "ST", "STREET", "AVE", "AVENUE",
+    "HWY", "HIGHWAY", "BLVD", "BOULEVARD", "CIR", "CIRCLE", "CT", "COURT",
+    "PL", "PLACE", "WAY", "TRL", "TRAIL", "LOOP", "PIKE", "RUN", "PATH",
+    "ROW", "SQ", "SQUARE", "TER", "TERRACE", "EXT", "EXTENSION", "ALY",
+    "ALLEY", "XING", "CROSSING",
+}
+
+
+def _parse_house_number_and_street(address):
+    """'2998 Owl Creek Road' -> ('2998', 'OWL CREEK'). Strips a single
+    trailing street-type suffix word (Road/Dr/Ln/...) since a listing's
+    wording and this layer's own FullPhysicalAddress text don't always agree
+    on it -- confirmed live 2026-09-09: an auction listed "111 Mylan Park
+    Dr", but the county's own record for that road is "Mylan Park LN", not
+    "Dr". Stripping the suffix and matching with a trailing wildcard (see
+    lookup_parcel_by_address_text) survives that kind of disagreement.
+
+    Returns (None, None) for a bare street name or a "0 [Street]" vacant-land
+    placeholder -- neither has a real house number to anchor an exact match
+    on, and guessing which nearby parcel it might be isn't this function's
+    job.
+    """
+    if not address:
+        return None, None
+    text = re.sub(r"[.,]", "", address.strip().upper())
+    m = re.match(r"^(\d+[A-Z]?)\s+(.+)$", text)
+    if not m:
+        return None, None
+    house_number, rest = m.group(1), m.group(2).strip()
+    if house_number == "0":
+        return None, None
+    words = rest.split()
+    if words and words[-1] in _STREET_SUFFIX_WORDS:
+        words = words[:-1]
+    if not words:
+        return None, None
+    return house_number, " ".join(words)
+
+
+def lookup_parcel_by_address_text(session: requests.Session, address: str):
+    """Fallback for a row with a real house number but no lat/lng yet --
+    including addresses the Census geocoder can't match because its
+    TIGER/Line data has no address range for that road at all (confirmed
+    live 2026-09-09 for genuine, well-formed rural WV addresses like "2998
+    Owl Creek Road, Morgantown" and "670 Walker Ridge Rd, Walton" -- both
+    zero matches from Census despite being real numbered addresses).
+
+    Queries this same statewide parcel layer (see ARCGIS_PARCELS_URL above)
+    by address TEXT instead of a point -- confirmed live that
+    FullPhysicalAddress supports a real attribute (WHERE-clause) query, not
+    just point/polygon lookups. This layer is sourced from county
+    assessor/GIS data, which sometimes has rural addresses TIGER doesn't.
+
+    Only ever returns an EXACT house-number match on the parsed street name
+    -- never the nearest one -- to keep the same "flag it, don't guess"
+    discipline as the rest of this pipeline. Confirmed live against 5 real
+    addresses stuck in the "No coordinates" review bucket: 2/5 had an exact
+    match in county data (424 Dusty Field Dr and 5211 Aarons Fork Rd, both
+    Kanawha County) -- the other 3/5 genuinely don't exist in county records
+    under that house number either (closest on file for "2998 Owl Creek Rd"
+    is 3011/3001/3330/3368/3388; for "670 Walker Ridge Rd" is
+    1904/2215/2291). So this recovers a real minority, not everything, and
+    it's expected to keep returning None for the rest.
+
+    Returns {"lat", "lng", "county", "map", "parcel", "matched_address"} on
+    an exact, unambiguous match, or None.
+    """
+    house_number, street = _parse_house_number_and_street(address)
+    if not house_number or not street:
+        return None
+
+    escaped_street = street.replace("'", "''")
+    where = f"UPPER(FullPhysicalAddress) LIKE '{house_number} {escaped_street}%'"
+    params = {
+        "f": "json",
+        "where": where,
+        "outFields": "COUNTY,Dist,Map,Parcel,FullPhysicalAddress",
+        "returnGeometry": "true",
+        "outSR": 4326,
+    }
+    resp = session.get(ARCGIS_PARCELS_URL, params=params, timeout=20)
+    resp.raise_for_status()
+    features = resp.json().get("features") or []
+
+    exact = []
+    for feat in features:
+        addr = (feat.get("attributes", {}).get("FullPhysicalAddress") or "").strip().upper()
+        addr_number = addr.split(" ", 1)[0] if addr else ""
+        if addr_number == house_number:
+            exact.append(feat)
+
+    if not exact:
+        return None
+
+    # More than one feature can carry the same house number (a parcel split
+    # across rings, or two genuinely different parcels sharing a mailing
+    # address) -- if they don't all agree on County+Map+Parcel, that's real
+    # ambiguity, and this returns nothing rather than guessing which one.
+    keys = {
+        (f["attributes"].get("COUNTY"), f["attributes"].get("Map"), f["attributes"].get("Parcel"))
+        for f in exact
+    }
+    if len(keys) > 1:
+        return None
+
+    attrs = exact[0]["attributes"]
+    lat = lng = None
+    rings = (exact[0].get("geometry") or {}).get("rings")
+    if rings and rings[0]:
+        pts = rings[0][:-1] if len(rings[0]) > 1 else rings[0]  # drop the closing duplicate point
+        if pts:
+            lng = sum(p[0] for p in pts) / len(pts)
+            lat = sum(p[1] for p in pts) / len(pts)
+
+    return {
+        "lat": lat,
+        "lng": lng,
+        "county": attrs.get("COUNTY"),
+        "map": attrs.get("Map"),
+        "parcel": attrs.get("Parcel"),
+        "matched_address": attrs.get("FullPhysicalAddress"),
+    }
+
+
 def search_assessment(session: requests.Session, county_code, map_=None, parcel=None,
                        street_name=None):
     """Search the WV Assessment database via its GET-able query-string search
