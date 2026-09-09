@@ -56,28 +56,61 @@ def parse_sqft_from_text(text: str):
         return None
 
 
+def _looks_like_tax_token(token: str) -> bool:
+    """A real WV district/map/parcel reference always has at least one digit
+    in it -- '23', '4G', '14E', '33.4', 'R10G', '035D' are all real examples
+    seen in this auctioneer's own listings. 'District'/'Map'/'Parcel'
+    immediately followed by an ordinary word from surrounding prose --
+    'Parcel Information:', 'Parcel ID#', 'District. Subject One:', 'Map with
+    the...' -- matches the same bare "word after the keyword" shape but is
+    never a real reference. Confirmed live 2026-09-09: 34 real past_auctions
+    rows had exactly this happen -- tax_parcel values of 'Information', 'ID',
+    'Gravel', 'Number', 'Very', 'with', 'off', 'in', and tax_district values
+    of 'Subject'/'and' -- which then fed a nonsense value into the WV
+    Assessment search instead of a real parcel number (or, worse, overrode a
+    correctly-detected ArcGIS parcel match -- see enrich_sqft_wv.py's
+    resolve_one(), which deliberately prefers a row's own tax_map/tax_parcel
+    over the point-lookup's guess for multi-parcel auctions). Every one of
+    those 34 rows was flagged "No WV Assessment match" as a result -- not
+    because the county doesn't have the parcel, but because we asked for the
+    wrong one.
+    """
+    return bool(re.search(r"\d", token))
+
+
+def _first_valid_token(text: str, pattern: str):
+    """Scan every occurrence of `pattern` in `text` (not just the first) and
+    return the first captured group that actually looks like a tax token.
+    Matters because a listing's boilerplate can put the keyword in front of
+    the real reference more than once -- e.g. "For Parcel Information,
+    contact the assessor. District 19, Map 4G, Parcel 71" has TWO "Parcel "
+    occurrences; taking only the first (re.search's default) would capture
+    "Information" and never even look at the real "Parcel 71" a few words
+    later in the very same description. Confirmed necessary live 2026-09-09
+    against several of the 34 rows this fix addresses -- some of them likely
+    do have a real reference sitting later in the same text, not just no
+    reference at all.
+    """
+    for m in re.finditer(pattern, text, re.IGNORECASE):
+        candidate = m.group(1).rstrip(".")
+        if _looks_like_tax_token(candidate):
+            return candidate
+    return None
+
+
 def parse_tax_reference(text: str):
     """Pull 'District 19, Map 4G, Parcel 71' (or similar orderings/spacing) out
     of a BidWrangler item description. Returns (district, map_, parcel) with
-    any piece set to None if not found. This is WV Pyle-listing-specific
-    phrasing observed in practice; tweak the patterns if the auctioneer changes
-    their listing template."""
+    any piece set to None if not found -- including when every occurrence of
+    "District"/"Map"/"Parcel" in the text is followed by ordinary prose
+    rather than an actual reference (see _looks_like_tax_token). This is WV
+    Pyle-listing-specific phrasing observed in practice; tweak the patterns
+    if the auctioneer changes their listing template."""
     if not text:
         return None, None, None
-    district = None
-    map_ = None
-    parcel = None
-
-    m = re.search(r"District\s+([A-Za-z0-9]+)", text, re.IGNORECASE)
-    if m:
-        district = m.group(1)
-    m = re.search(r"Map\s+([A-Za-z0-9]+)", text, re.IGNORECASE)
-    if m:
-        map_ = m.group(1)
-    m = re.search(r"Parcel\s+([A-Za-z0-9.]+)", text, re.IGNORECASE)
-    if m:
-        parcel = m.group(1).rstrip(".")
-
+    district = _first_valid_token(text, r"District\s+([A-Za-z0-9]+)")
+    map_ = _first_valid_token(text, r"Map\s+([A-Za-z0-9]+)")
+    parcel = _first_valid_token(text, r"Parcel\s+([A-Za-z0-9.]+)")
     return district, map_, parcel
 
 
