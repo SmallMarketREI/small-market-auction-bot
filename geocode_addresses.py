@@ -19,14 +19,23 @@ geocoder can only match a real numbered address range, so these correctly
 come back with no match every time, not just once -- see
 common/geocoding.py's module docstring for why a looser fallback isn't used
 here. Every row this happens to gets a plain, honest review_reason instead
-of a silently-wrong guessed coordinate; a future pass could look up these
-specific parcels by name/description against the county GIS directly, but
-that's real new scope, not a tweak to this script.
+of a silently-wrong guessed coordinate.
+
+WV parcel-layer fallback (added 2026-09-09): for a WV row Census still
+couldn't match, this now tries a second source before giving up --
+wv_assessment.lookup_parcel_by_address_text(), which queries WV's own
+statewide parcel layer (county assessor/GIS data, not Census TIGER) by
+address text. Confirmed live this recovers a real minority of the rural
+addresses Census misses (2 of 5 tested) -- the rest genuinely aren't in
+county records under that house number either, and correctly stay
+unmatched. See that function's docstring in common/wv_assessment.py for the
+full finding. This fallback only runs for state=WV rows, since the data
+source itself is WV-specific.
 """
 import sys
 import time
 
-from common import geocoding, supabase_client
+from common import geocoding, supabase_client, wv_assessment
 
 _SELECT_FIELDS = "id,address,city,state,zip"
 
@@ -39,8 +48,9 @@ def candidates(table: str) -> list:
 
 def run(limit: int = None):
     session = geocoding.new_session()
+    wv_session = wv_assessment.new_session()
 
-    totals = {"checked": 0, "geocoded": 0, "no_match": 0, "errors": []}
+    totals = {"checked": 0, "geocoded": 0, "geocoded_wv_fallback": 0, "no_match": 0, "errors": []}
     for table in ("past_auctions", "watch_auctions"):
         rows = candidates(table)
         if limit:
@@ -48,6 +58,7 @@ def run(limit: int = None):
         print(f"{table}: {len(rows)} rows missing lat/lng with an address to try")
 
         geocoded = 0
+        geocoded_fallback = 0
         no_match = 0
         for row in rows:
             try:
@@ -58,6 +69,22 @@ def run(limit: int = None):
                 totals["errors"].append(f"{table} {row['id']}: {e}")
                 time.sleep(geocoding.REQUEST_DELAY_SECONDS)
                 continue
+
+            via_fallback = False
+            if result is None and (row.get("state") or "").strip().upper() in ("WV", "WEST VIRGINIA"):
+                # Census has no address-range data for a lot of rural WV
+                # roads -- try WV's own parcel layer (county-sourced) before
+                # giving up. See wv_assessment.lookup_parcel_by_address_text
+                # for what this can and can't recover.
+                try:
+                    fallback = wv_assessment.lookup_parcel_by_address_text(wv_session, row.get("address"))
+                except Exception as e:  # noqa: BLE001
+                    totals["errors"].append(f"{table} {row['id']}: WV parcel fallback: {e}")
+                    fallback = None
+                if fallback and fallback.get("lat") is not None:
+                    result = {"lat": fallback["lat"], "lng": fallback["lng"]}
+                    via_fallback = True
+                time.sleep(geocoding.REQUEST_DELAY_SECONDS)
 
             if result is None:
                 no_match += 1
@@ -70,15 +97,19 @@ def run(limit: int = None):
                     "lng": result["lng"],
                 })
                 geocoded += 1
+                if via_fallback:
+                    geocoded_fallback += 1
             except Exception as e:  # noqa: BLE001
                 totals["errors"].append(f"{table} {row['id']}: write failed: {e}")
 
             time.sleep(geocoding.REQUEST_DELAY_SECONDS)
 
-        print(f"{table}: geocoded {geocoded}, no match for {no_match} "
+        print(f"{table}: geocoded {geocoded} ({geocoded_fallback} via the WV parcel-layer fallback), "
+              f"no match for {no_match} "
               f"(most commonly a vacant-land placeholder address with no real house number)")
         totals["checked"] += len(rows)
         totals["geocoded"] += geocoded
+        totals["geocoded_wv_fallback"] += geocoded_fallback
         totals["no_match"] += no_match
 
     supabase_client.log_run(
