@@ -117,9 +117,9 @@ a{color:#d7dce4}
 
 <section id="evaluator" class="section">
 <div class="panelhead"><h2>Property Evaluator</h2></div>
-<div class="notice">Find similar auction comps by city/ZIP + property type + size, then estimate value and a max buy price.</div>
+<div class="notice">Enter a subject address once -- this pulls together our auction comps, WV Assessment/appraisal data (when we already have it on file for this address), the repair estimate below, and a suggested value + buy range, all in one place.</div>
 <div class="evalgrid">
- <input id="eAddress" placeholder="Subject address (optional)">
+ <input id="eAddress" placeholder="Subject address">
  <input id="eCity" placeholder="City">
  <input id="eZip" placeholder="ZIP">
  <select id="eType"><option>House</option><option>Land</option><option>Mobile Home</option><option>Commercial</option></select>
@@ -127,18 +127,30 @@ a{color:#d7dce4}
  <input id="eRepairs" placeholder="Estimated repairs $" type="number">
  <input id="eProfit" placeholder="Target profit $" type="number">
 </div>
-<button class="primary" onclick="findSimilar()">Find Comps</button>
+<button class="primary" onclick="analyzeProperty()">Analyze Property</button>
+
+<div class="panelhead" style="margin-top:24px"><h2>Property &amp; Assessment Data</h2></div>
+<div class="small" id="assessmentStatus" style="margin-bottom:10px">Enter an address above and click "Analyze Property" to check it against our records.</div>
+<div class="metrics" id="assessmentMetrics" style="display:none">
+ <div class="metric"><div class="bidlabel">Total Appraisal</div><div class="bidvalue" id="aTotal">--</div></div>
+ <div class="metric"><div class="bidlabel">Land Appraisal</div><div class="bidvalue" id="aLand">--</div></div>
+ <div class="metric"><div class="bidlabel">Building Appraisal</div><div class="bidvalue" id="aBuilding">--</div></div>
+ <div class="metric"><div class="bidlabel">Year Built</div><div class="bidvalue" id="aYear">--</div></div>
+ <div class="metric"><div class="bidlabel">Beds / Baths</div><div class="bidvalue" id="aBeds">--</div></div>
+ <div class="metric"><div class="bidlabel">Deeded Acres</div><div class="bidvalue" id="aAcres">--</div></div>
+</div>
+<div class="small" id="assessmentSource" style="margin-top:10px"></div>
 
 <div class="panelhead" style="margin-top:24px"><h2>Repair Cost Calculator</h2></div>
 <div class="notice">Square footage &times; cost per sq ft = a rough rehab estimate. Uses the "Subject sq ft" entered above -- pick a condition level, or type your own cost per sq ft if a house doesn't fit one of the labels.</div>
 <div class="evalgrid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
  <select id="rehabLevel" onchange="updateRehabEstimate()">
-  <option value="0">Light Touch Up -- $20/sq ft</option>
-  <option value="1">Paint And Cleanout -- $25-$30/sq ft</option>
-  <option value="2">Basic Cosmetics -- $40/sq ft</option>
+  <option value="0">Very Light -- $25/sq ft</option>
+  <option value="1">Light Rehab -- $30/sq ft</option>
+  <option value="2">Cosmetic Rehab -- $40/sq ft</option>
   <option value="3" selected>Medium Rehab -- $50/sq ft</option>
   <option value="4">Heavy Rehab -- $60/sq ft</option>
-  <option value="5">Full Gut -- $70/sq ft</option>
+  <option value="5">Full Rehab -- $70/sq ft</option>
  </select>
  <input id="rehabOverride" placeholder="Custom cost per sq ft (optional)" type="number" min="0" step="0.5" oninput="updateRehabEstimate()">
 </div>
@@ -150,16 +162,25 @@ a{color:#d7dce4}
 <button class="primary" onclick="applyRehabEstimate()">Use This For Repairs</button>
 <div class="small" id="rehabApplied" style="margin-top:8px"></div>
 <div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
-<div class="metrics">
+
+<div class="panelhead" style="margin-top:24px"><h2>Suggested Value &amp; Buy Range</h2></div>
+<div class="notice">Suggested value is comps-led: median $/sq ft from verified auction comps &times; subject sq ft. WV Assessment's appraisal (above, when we have it) is shown as a check against that number, not blended into it -- if the two disagree by a lot, that's flagged below so it gets a second look rather than silently averaged away.</div>
+<div class="metrics" style="grid-template-columns:repeat(4,minmax(0,1fr))">
  <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
  <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="mLow">$0</div></div>
  <div class="metric"><div class="bidlabel">Median PPSF</div><div class="bidvalue" id="mMedian">$0</div></div>
  <div class="metric"><div class="bidlabel">High PPSF</div><div class="bidvalue" id="mHigh">$0</div></div>
- <div class="metric"><div class="bidlabel">Est. Value</div><div class="bidvalue" id="mValue">$0</div></div>
+ <div class="metric"><div class="bidlabel">Suggested Value</div><div class="bidvalue" id="mValue">$0</div></div>
+ <div class="metric"><div class="bidlabel">Conservative Buy Price</div><div class="bidvalue" id="mBuyLow">$0</div></div>
  <div class="metric"><div class="bidlabel">Max Buy Price</div><div class="bidvalue" id="mBuy">$0</div></div>
 </div>
+<div class="small" id="appraisalCheck" style="margin-top:10px"></div>
+
 <div class="panelhead" style="margin-top:20px"><h2>Comparable Sales</h2></div>
 <div class="comparegrid" id="compareGrid"></div>
+
+<div class="panelhead" style="margin-top:20px"><h2>Retail Comps</h2></div>
+<div class="notice">Not wired up yet -- once retail-market comps are added as a data source, they'll show here alongside the auction comps above and factor into the suggested value the same way the appraisal check does.</div>
 </section>
 
 <section id="unsold" class="section">
@@ -350,24 +371,26 @@ function renderWatch(){
 }
 
 // Repair Cost Calculator -- sqft x cost/sqft = a rough rehab estimate.
-// Rates and labels are Elijah's own, from the 2026-09-08 team meeting: a
-// quick gut-check number for screening a deal, not a contractor bid.
-// "Paint And Cleanout" is the one label given as a range ($25-$30) rather
-// than a single rate -- shown as a range throughout, and the midpoint
-// ($27.50) is what gets used if "Use This For Repairs" is clicked, since
-// the Property Evaluator's buy-price math needs one number, not a range.
+// Rates and labels are Elijah's client's own, updated 2026-09-09 to match
+// how they actually talk about rehab levels internally (replaces the
+// original 2026-09-08 label set) -- a quick gut-check number for screening
+// a deal, not a contractor bid. Every level is now a single rate (the
+// former "Paint And Cleanout" $25-$30 range became a flat "Light Rehab"
+// $30 rate) -- low/high are kept equal per level rather than collapsing to
+// one field so currentRehabRate()/updateRehabEstimate() below don't need a
+// separate code path for the (now nonexistent) range case.
 const REHAB_LEVELS=[
- {label:"Light Touch Up",low:20,high:20,
+ {label:"Very Light",low:25,high:25,
   meaning:"Mostly cleanout, paint, minor repairs, and small punch list items. No major systems."},
- {label:"Paint And Cleanout",low:25,high:30,
+ {label:"Light Rehab",low:30,high:30,
   meaning:"Needs paint, flooring touch ups, cleaning, small repairs, maybe a few fixtures. Still not a true rehab."},
- {label:"Basic Cosmetics",low:40,high:40,
+ {label:"Cosmetic Rehab",low:40,high:40,
   meaning:"Paint, flooring, countertops, light kitchen or bath updates, general cosmetic cleanup."},
  {label:"Medium Rehab",low:50,high:50,
   meaning:"Cosmetic work plus something bigger, like roof, HVAC, plumbing, electrical, or more kitchen and bath work."},
  {label:"Heavy Rehab",low:60,high:60,
   meaning:"Most of the house needs touched. More unknowns, possible systems, roof, kitchen, bath, flooring, exterior, and repairs."},
- {label:"Full Gut",low:70,high:70,
+ {label:"Full Rehab",low:70,high:70,
   meaning:"Rough house. Needs a little bit of everything. Systems, cosmetics, roof, exterior, possible layout or structural concerns."},
 ];
 
@@ -408,10 +431,66 @@ function applyRehabEstimate(){
  applied.className="small";
 }
 
-function findSimilar(){
+function normalizeAddress(s){
+ return (s||"").toLowerCase().replace(/[.,#]/g,"").replace(/\s+/g," ").trim();
+}
+
+// Looks for the subject address among our own past_auctions records -- the
+// only table WV Assessment enrichment ever writes appraisal/year-built/
+// bed-bath data to (see enrich_sqft_wv.py; watch_auctions never gets that
+// step run against it). A match here is the only way this screen can show
+// that data without a live lookup against WV's site, which a static page
+// like this one can't do directly -- WV's own services don't allow
+// cross-origin browser requests (confirmed live 2026-09-09), so a genuinely
+// new address needs a small server-side lookup step this doesn't have yet.
+// No match just means "not something we've already tracked," not an error.
+function matchRecordByAddress(address,zip){
+ const na=normalizeAddress(address);
+ if(!na) return null;
+ return past.find(r=>normalizeAddress(r.address)===na && (!zip || !r.zip || r.zip===zip)) || null;
+}
+
+function renderAssessmentPanel(match){
+ const status=document.getElementById("assessmentStatus");
+ const metrics=document.getElementById("assessmentMetrics");
+ const source=document.getElementById("assessmentSource");
+ const hasData = match && (match.comp_total_appraisal!=null || match.comp_sqft!=null);
+ if(!hasData){
+  metrics.style.display="none";
+  source.textContent="";
+  status.textContent = match
+   ? "Found this address in our past auctions, but we don't have WV Assessment/appraisal data on file for it yet."
+   : 'Not yet in our database -- enter sq ft and property type manually below. (Live lookup for brand-new addresses isn\'t built yet -- see the delivery notes.)';
+  status.className="small";
+  return;
+ }
+ status.textContent = `Matched to our records: ${[match.address,match.city,match.state].filter(Boolean).join(", ")}`;
+ status.className="small good";
+ metrics.style.display="";
+ document.getElementById("aTotal").textContent=money(match.comp_total_appraisal);
+ document.getElementById("aLand").textContent=money(match.comp_land_value);
+ document.getElementById("aBuilding").textContent=money(match.comp_building_value);
+ document.getElementById("aYear").textContent=match.comp_year_built!=null?match.comp_year_built:"--";
+ const baths=match.comp_full_baths!=null?match.comp_full_baths+(match.comp_half_baths?` + ${match.comp_half_baths} half`:""):"--";
+ document.getElementById("aBeds").textContent=(match.comp_bedrooms!=null?match.comp_bedrooms:"--")+" / "+baths;
+ document.getElementById("aAcres").textContent=match.comp_deeded_acres!=null?match.comp_deeded_acres+" ac":"--";
+ source.innerHTML = `Square footage: ${match.comp_sqft?Number(match.comp_sqft).toLocaleString()+" sq ft":"Unavailable"} (${match.comp_sqft_source||"source not recorded"})${match.comp_sqft_source_url?` &middot; <a class="linkbtn" href="${match.comp_sqft_source_url}" target="_blank" rel="noopener">View WV Assessment record</a>`:""}`;
+ // Auto-fill from the match, but never overwrite something already typed in.
+ const sqftInput=document.getElementById("eSqft");
+ if(!sqftInput.value && match.comp_sqft) sqftInput.value=match.comp_sqft;
+ const typeSelect=document.getElementById("eType");
+ if(match.property_type && [...typeSelect.options].some(o=>o.value===match.property_type)) typeSelect.value=match.property_type;
+}
+
+function analyzeProperty(){
  const address=(document.getElementById("eAddress").value||"").trim();
  const city=(document.getElementById("eCity").value||"").trim().toLowerCase();
  const zip=(document.getElementById("eZip").value||"").trim();
+
+ const match=matchRecordByAddress(address,zip);
+ renderAssessmentPanel(match);
+ updateRehabEstimate(); // refresh in case the match just auto-filled sq ft
+
  const type=document.getElementById("eType").value;
  const subj=+document.getElementById("eSqft").value||0;
 
@@ -439,15 +518,36 @@ function findSimilar(){
 
  const vals=evalCandidates.map(getPpsf).filter(Boolean);
  document.getElementById("mFound").textContent=evalCandidates.length;
+ const appraisalCheck=document.getElementById("appraisalCheck");
+ appraisalCheck.textContent="";
+ appraisalCheck.className="small";
  if(vals.length){
   const low=Math.min(...vals),med=percentile(vals,.5),high=Math.max(...vals);
+  const repairs=+document.getElementById("eRepairs").value||0;
+  const profit=+document.getElementById("eProfit").value||0;
   document.getElementById("mLow").textContent="$"+low.toFixed(2);
   document.getElementById("mMedian").textContent="$"+med.toFixed(2);
   document.getElementById("mHigh").textContent="$"+high.toFixed(2);
-  document.getElementById("mValue").textContent=subj?money(subj*med):"$0";
-  document.getElementById("mBuy").textContent=subj?money(Math.max(0,subj*med-(+document.getElementById("eRepairs").value||0)-(+document.getElementById("eProfit").value||0))):"$0";
+  const suggestedValue=subj?subj*med:0;
+  document.getElementById("mValue").textContent=subj?money(suggestedValue):"$0";
+  document.getElementById("mBuyLow").textContent=subj?money(Math.max(0,subj*low-repairs-profit)):"$0";
+  document.getElementById("mBuy").textContent=subj?money(Math.max(0,subj*med-repairs-profit)):"$0";
+
+  // Appraisal check: comps drive the suggested value; WV Assessment's own
+  // total appraisal (when we have it) is only ever a flag against that
+  // number, per Elijah's client's own preference -- never blended in.
+  if(suggestedValue && match && match.comp_total_appraisal){
+   const diff=(suggestedValue-match.comp_total_appraisal)/match.comp_total_appraisal;
+   if(Math.abs(diff)>=.20){
+    appraisalCheck.textContent=`Comps-based suggested value is ${Math.round(Math.abs(diff)*100)}% ${diff>0?"higher":"lower"} than WV Assessment's total appraisal (${money(match.comp_total_appraisal)}) -- worth a second look before relying on either number alone.`;
+    appraisalCheck.className="small warn";
+   } else {
+    appraisalCheck.textContent=`Consistent with WV Assessment's total appraisal (${money(match.comp_total_appraisal)}).`;
+    appraisalCheck.className="small good";
+   }
+  }
  } else {
-  ["mLow","mMedian","mHigh","mValue","mBuy"].forEach(id=>document.getElementById(id).textContent="$0");
+  ["mLow","mMedian","mHigh","mValue","mBuyLow","mBuy"].forEach(id=>document.getElementById(id).textContent="$0");
  }
  renderEvaluator(vals);
 }
