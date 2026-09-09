@@ -57,6 +57,33 @@ def test_parse_tax_reference():
     print("OK: parse_tax_reference ->", district, map_, parcel)
 
 
+def test_parse_tax_reference_rejects_ordinary_prose_after_the_keyword():
+    # Real garbage captured live 2026-09-09 from 34 actual past_auctions rows --
+    # "Parcel Information:", "Parcel ID#", "District. Subject One:" etc. all
+    # match the same "keyword + next word" shape as a real reference, but the
+    # captured word isn't one. None of these should produce a value.
+    assert parsing_utils.parse_tax_reference("Tax Map/Parcel Information: contact the assessor") == (None, None, None)
+    assert parsing_utils.parse_tax_reference("See Parcel ID# for details") == (None, None, None)
+    assert parsing_utils.parse_tax_reference("Gravel driveway. Map 292, Parcel Gravel Rd access") == (None, "292", None)
+    assert parsing_utils.parse_tax_reference("Located in Tax District. Subject One: 123 Main St") == (None, None, None)
+    assert parsing_utils.parse_tax_reference("Map 13 with Parcel access from the road") == (None, "13", None)
+    # A real letter-prefixed reference (contains a digit) must still pass through.
+    assert parsing_utils.parse_tax_reference("District 10, Map W42, Parcel H7") == ("10", "W42", "H7")
+    print("OK: parse_tax_reference() rejects a bare English word after District/Map/Parcel "
+          "(no digit in it) instead of capturing it as a fake reference, while still "
+          "accepting real letter-prefixed references like 'W42' and 'H7'")
+
+
+def test_parse_tax_reference_skips_past_boilerplate_to_the_real_reference():
+    # A listing that mentions "Parcel Information" as boilerplate BEFORE the
+    # real reference must not let that first, bogus "Parcel " occurrence hide
+    # the real one later in the same text.
+    text = "For Parcel Information, contact the assessor. District 19, Map 4G, Parcel 71."
+    assert parsing_utils.parse_tax_reference(text) == ("19", "4G", "71")
+    print("OK: parse_tax_reference() looks past an earlier bogus 'Parcel Information' "
+          "mention to find the real 'Parcel 71' later in the same description")
+
+
 def test_parse_sqft_from_text():
     sqft = parsing_utils.parse_sqft_from_text(SAMPLE_DETAIL["items"][0]["description_without_html"])
     assert sqft == 784.0, sqft
@@ -516,6 +543,8 @@ def test_select_best_match_disambiguates_sibling_subparcels():
 if __name__ == "__main__":
     test_summarize_auction()
     test_parse_tax_reference()
+    test_parse_tax_reference_rejects_ordinary_prose_after_the_keyword()
+    test_parse_tax_reference_skips_past_boilerplate_to_the_real_reference()
     test_parse_sqft_from_text()
     test_compute_ppsf()
     test_get_assessment_detail_parsing()
