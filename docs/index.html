@@ -123,11 +123,32 @@ a{color:#d7dce4}
  <input id="eCity" placeholder="City">
  <input id="eZip" placeholder="ZIP">
  <select id="eType"><option>House</option><option>Land</option><option>Mobile Home</option><option>Commercial</option></select>
- <input id="eSqft" placeholder="Subject sq ft" type="number">
+ <input id="eSqft" placeholder="Subject sq ft" type="number" oninput="updateRehabEstimate()">
  <input id="eRepairs" placeholder="Estimated repairs $" type="number">
  <input id="eProfit" placeholder="Target profit $" type="number">
 </div>
 <button class="primary" onclick="findSimilar()">Find Comps</button>
+
+<div class="panelhead" style="margin-top:24px"><h2>Repair Cost Calculator</h2></div>
+<div class="notice">Square footage &times; cost per sq ft = a rough rehab estimate. Uses the "Subject sq ft" entered above -- pick a condition level, or type your own cost per sq ft if a house doesn't fit one of the labels.</div>
+<div class="evalgrid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+ <select id="rehabLevel" onchange="updateRehabEstimate()">
+  <option value="0">Light Touch Up -- $20/sq ft</option>
+  <option value="1">Paint And Cleanout -- $25-$30/sq ft</option>
+  <option value="2">Basic Cosmetics -- $40/sq ft</option>
+  <option value="3" selected>Medium Rehab -- $50/sq ft</option>
+  <option value="4">Heavy Rehab -- $60/sq ft</option>
+  <option value="5">Full Gut -- $70/sq ft</option>
+ </select>
+ <input id="rehabOverride" placeholder="Custom cost per sq ft (optional)" type="number" min="0" step="0.5" oninput="updateRehabEstimate()">
+</div>
+<div class="small" id="rehabMeaning" style="margin:10px 0"></div>
+<div class="metrics" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+ <div class="metric"><div class="bidlabel">Rate Used</div><div class="bidvalue" id="rehabRateOut">$0/sq ft</div></div>
+ <div class="metric"><div class="bidlabel">Estimated Rehab Cost</div><div class="bidvalue" id="rehabCostOut">Enter sq ft above</div></div>
+</div>
+<button class="primary" onclick="applyRehabEstimate()">Use This For Repairs</button>
+<div class="small" id="rehabApplied" style="margin-top:8px"></div>
 <div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
 <div class="metrics">
  <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
@@ -328,6 +349,65 @@ function renderWatch(){
  });
 }
 
+// Repair Cost Calculator -- sqft x cost/sqft = a rough rehab estimate.
+// Rates and labels are Elijah's own, from the 2026-09-08 team meeting: a
+// quick gut-check number for screening a deal, not a contractor bid.
+// "Paint And Cleanout" is the one label given as a range ($25-$30) rather
+// than a single rate -- shown as a range throughout, and the midpoint
+// ($27.50) is what gets used if "Use This For Repairs" is clicked, since
+// the Property Evaluator's buy-price math needs one number, not a range.
+const REHAB_LEVELS=[
+ {label:"Light Touch Up",low:20,high:20,
+  meaning:"Mostly cleanout, paint, minor repairs, and small punch list items. No major systems."},
+ {label:"Paint And Cleanout",low:25,high:30,
+  meaning:"Needs paint, flooring touch ups, cleaning, small repairs, maybe a few fixtures. Still not a true rehab."},
+ {label:"Basic Cosmetics",low:40,high:40,
+  meaning:"Paint, flooring, countertops, light kitchen or bath updates, general cosmetic cleanup."},
+ {label:"Medium Rehab",low:50,high:50,
+  meaning:"Cosmetic work plus something bigger, like roof, HVAC, plumbing, electrical, or more kitchen and bath work."},
+ {label:"Heavy Rehab",low:60,high:60,
+  meaning:"Most of the house needs touched. More unknowns, possible systems, roof, kitchen, bath, flooring, exterior, and repairs."},
+ {label:"Full Gut",low:70,high:70,
+  meaning:"Rough house. Needs a little bit of everything. Systems, cosmetics, roof, exterior, possible layout or structural concerns."},
+];
+
+// The manual override replaces the selected level's rate entirely when a
+// positive number is typed in -- it does not blend with or adjust the
+// level, since Elijah's spec is "type our own cost per square foot", a
+// straight substitute for when a house doesn't fit one of the six labels.
+function currentRehabRate(){
+ const override=+document.getElementById("rehabOverride").value;
+ if(override>0) return {low:override,high:override,custom:true};
+ const level=REHAB_LEVELS[+document.getElementById("rehabLevel").value];
+ return {low:level.low,high:level.high,custom:false};
+}
+
+function updateRehabEstimate(){
+ const level=REHAB_LEVELS[+document.getElementById("rehabLevel").value];
+ document.getElementById("rehabMeaning").textContent=level.meaning;
+ const rate=currentRehabRate();
+ document.getElementById("rehabRateOut").textContent = rate.custom
+  ? "$"+rate.low.toFixed(2)+"/sq ft (custom)"
+  : (rate.low===rate.high ? "$"+rate.low+"/sq ft" : "$"+rate.low+"-$"+rate.high+"/sq ft");
+ const sqft=+document.getElementById("eSqft").value||0;
+ const costOut=document.getElementById("rehabCostOut");
+ if(!sqft){costOut.textContent="Enter sq ft above";return;}
+ const lowCost=sqft*rate.low, highCost=sqft*rate.high;
+ costOut.textContent = lowCost===highCost ? money(lowCost) : money(lowCost)+" - "+money(highCost);
+}
+
+function applyRehabEstimate(){
+ const sqft=+document.getElementById("eSqft").value||0;
+ const applied=document.getElementById("rehabApplied");
+ if(!sqft){applied.textContent="Enter the subject sq ft above first.";applied.className="small bad";return;}
+ const rate=currentRehabRate();
+ const mid=(rate.low+rate.high)/2;
+ const estimate=Math.round(sqft*mid);
+ document.getElementById("eRepairs").value=estimate;
+ applied.textContent=`Set Estimated Repairs to ${money(estimate)} (${sqft.toLocaleString()} sq ft × $${mid.toFixed(2)}/sq ft). Adjust "Estimated repairs $" above directly if you have a firmer number.`;
+ applied.className="small";
+}
+
 function findSimilar(){
  const address=(document.getElementById("eAddress").value||"").trim();
  const city=(document.getElementById("eCity").value||"").trim().toLowerCase();
@@ -453,6 +533,7 @@ async function loadData(){
 }
 
 loadData();
+updateRehabEstimate();
 </script>
 </body>
 </html>
