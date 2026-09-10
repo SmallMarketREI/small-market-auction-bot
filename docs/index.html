@@ -124,8 +124,8 @@ a{color:#d7dce4}
  <input id="eZip" placeholder="ZIP">
  <select id="eType"><option>House</option><option>Land</option><option>Mobile Home</option><option>Commercial</option></select>
  <input id="eSqft" placeholder="Subject sq ft" type="number" oninput="updateRehabEstimate()">
- <input id="eRepairs" placeholder="Estimated repairs $" type="number">
- <input id="eProfit" placeholder="Target profit $" type="number">
+ <input id="eRepairs" placeholder="Estimated repairs $" type="number" oninput="renderValueMetrics()">
+ <input id="eProfit" placeholder="Target profit $" type="number" oninput="renderValueMetrics()">
 </div>
 <button class="primary" onclick="analyzeProperty()">Analyze Property</button>
 
@@ -174,7 +174,8 @@ a{color:#d7dce4}
  <div class="metric"><div class="bidlabel">Conservative Buy Price</div><div class="bidvalue" id="mBuyLow">$0</div></div>
  <div class="metric"><div class="bidlabel">Max Buy Price</div><div class="bidvalue" id="mBuy">$0</div></div>
 </div>
-<div class="small" id="appraisalCheck" style="margin-top:10px"></div>
+<div class="small" id="arvSourceNote" style="margin-top:10px"></div>
+<div class="small" id="appraisalCheck" style="margin-top:6px"></div>
 
 <div class="panelhead" style="margin-top:24px"><h2>Offer Generator</h2></div>
 <div class="notice">Comp/ARV Value &minus; Repairs &minus; Desired Profit &minus; Other Costs = Offer. ARV auto-fills from the suggested value above and Repairs auto-fills from the repair estimator, but every field here is a plain number you can type over -- the offer recalculates as soon as you change any of them.</div>
@@ -193,7 +194,10 @@ a{color:#d7dce4}
 <div class="comparegrid" id="compareGrid"></div>
 
 <div class="panelhead" style="margin-top:20px"><h2>Retail Comps</h2></div>
-<div class="notice">Not wired up yet -- once retail-market comps are added as a data source, they'll show here alongside the auction comps above and factor into the suggested value the same way the appraisal check does.</div>
+<div class="notice">Not wired up yet -- once retail-market comps are added as a data source, they'll show here alongside the auction comps above. Until then, enter your own ARV below (from a retail comp you've pulled yourself, an appraisal, or your own judgment) and it takes over Suggested Value, Buy Range, and the Offer Generator's ARV everywhere above -- leave it blank to keep using the comps-based number.</div>
+<div class="evalgrid" style="grid-template-columns:minmax(0,1fr)">
+ <input id="manualArv" placeholder="Manual ARV $ (optional -- overrides the comps-based value everywhere above)" type="number" oninput="renderValueMetrics()">
+</div>
 </section>
 
 <section id="unsold" class="section">
@@ -240,6 +244,11 @@ let evalCandidates = [];
 // whenever there's no suggested value yet (no comps found, or no sq ft
 // entered), so the ARV field is left for manual entry instead.
 let lastSuggestedValue = null;
+// The matched past_auctions record (if any) from the most recent Analyze
+// Property click -- kept around so renderValueMetrics() can re-run the
+// appraisal check whenever repairs/profit/manual ARV change, without
+// needing another full re-analysis.
+let lastMatch = null;
 
 const money=v=>v==null?"Unavailable":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
 const getPpsf=r=>(r.comp_sqft&&r.published_final_sold_price)?r.published_final_sold_price/r.comp_sqft:null;
@@ -440,6 +449,14 @@ function updateRehabEstimate(){
 // Same low/high-midpoint math applyRehabEstimate() has always used, pulled
 // out so the Offer Generator's Repairs field can pull the same number
 // without needing the "Use This For Repairs" button clicked first.
+// The Retail Comps section's manual-ARV field -- returns null (not 0) when
+// empty so callers can tell "no manual override" apart from "override of
+// zero," and fall back to the comps-based value.
+function manualArvValue(){
+ const v=+document.getElementById("manualArv").value;
+ return v>0 ? v : null;
+}
+
 function currentRehabCost(){
  const sqft=+document.getElementById("eSqft").value||0;
  if(!sqft) return null;
@@ -458,7 +475,10 @@ function applyRehabEstimate(){
  document.getElementById("eRepairs").value=estimate;
  applied.textContent=`Set Estimated Repairs to ${money(estimate)} (${sqft.toLocaleString()} sq ft × $${mid.toFixed(2)}/sq ft). Adjust "Estimated repairs $" above directly if you have a firmer number.`;
  applied.className="small";
- autoFillOffer(); // keep the Offer Generator's Repairs field (if still empty) and the Offer total in sync
+ // Setting eRepairs.value above doesn't fire its own oninput handler, so
+ // explicitly refresh Buy Range (which reads eRepairs) and, in turn via
+ // renderValueMetrics(), the Offer Generator's auto-fill.
+ renderValueMetrics();
 }
 
 // Fills any currently-empty Offer Generator field from the best number this
@@ -578,6 +598,7 @@ function analyzeProperty(){
  const zip=(document.getElementById("eZip").value||"").trim();
 
  const match=matchRecordByAddress(address,zip);
+ lastMatch = match;
  renderAssessmentPanel(match);
  updateRehabEstimate(); // refresh in case the match just auto-filled sq ft
 
@@ -606,43 +627,85 @@ function analyzeProperty(){
     return (b.auction_date||"").localeCompare(a.auction_date||"");
   });
 
+ renderValueMetrics();
+ renderEvaluator(evalCandidates.map(getPpsf).filter(Boolean));
+}
+
+// Suggested Value, Buy Range, the appraisal check, and the Offer
+// Generator's ARV auto-fill all come from here. Comps-based value is the
+// default (median $/sq ft from verified comps x subject sq ft); a manual
+// ARV entered in the Retail Comps section (a stand-in until real retail
+// comps are wired up) takes over everywhere on this screen the moment
+// it's filled in -- Suggested Value, both buy prices, and what the Offer
+// Generator auto-fills -- and reverts to the comps-based number the moment
+// it's cleared. The appraisal check underneath, though, always compares
+// the comps-based number against WV Assessment specifically -- a manual
+// ARV is your own number, not a second independent estimate to flag the
+// comps against.
+// Called after every Analyze Property click, and directly (without a full
+// re-analysis) whenever Estimated Repairs, Target Profit, or Manual ARV
+// change, so Buy Range and the Offer Generator always reflect what's
+// currently on screen.
+function renderValueMetrics(){
  const vals=evalCandidates.map(getPpsf).filter(Boolean);
  document.getElementById("mFound").textContent=evalCandidates.length;
- const appraisalCheck=document.getElementById("appraisalCheck");
- appraisalCheck.textContent="";
- appraisalCheck.className="small";
+
+ const subj=+document.getElementById("eSqft").value||0;
+ const repairs=+document.getElementById("eRepairs").value||0;
+ const profit=+document.getElementById("eProfit").value||0;
+ const manual=manualArvValue();
+
  if(vals.length){
   const low=Math.min(...vals),med=percentile(vals,.5),high=Math.max(...vals);
-  const repairs=+document.getElementById("eRepairs").value||0;
-  const profit=+document.getElementById("eProfit").value||0;
   document.getElementById("mLow").textContent="$"+low.toFixed(2);
   document.getElementById("mMedian").textContent="$"+med.toFixed(2);
   document.getElementById("mHigh").textContent="$"+high.toFixed(2);
-  const suggestedValue=subj?subj*med:0;
-  document.getElementById("mValue").textContent=subj?money(suggestedValue):"$0";
-  document.getElementById("mBuyLow").textContent=subj?money(Math.max(0,subj*low-repairs-profit)):"$0";
-  document.getElementById("mBuy").textContent=subj?money(Math.max(0,subj*med-repairs-profit)):"$0";
-  lastSuggestedValue = subj ? suggestedValue : null;
-
-  // Appraisal check: comps drive the suggested value; WV Assessment's own
-  // total appraisal (when we have it) is only ever a flag against that
-  // number, per Elijah's client's own preference -- never blended in.
-  if(suggestedValue && match && match.comp_total_appraisal){
-   const diff=(suggestedValue-match.comp_total_appraisal)/match.comp_total_appraisal;
-   if(Math.abs(diff)>=.20){
-    appraisalCheck.textContent=`Comps-based suggested value is ${Math.round(Math.abs(diff)*100)}% ${diff>0?"higher":"lower"} than WV Assessment's total appraisal (${money(match.comp_total_appraisal)}) -- worth a second look before relying on either number alone.`;
-    appraisalCheck.className="small warn";
-   } else {
-    appraisalCheck.textContent=`Consistent with WV Assessment's total appraisal (${money(match.comp_total_appraisal)}).`;
-    appraisalCheck.className="small good";
-   }
-  }
  } else {
-  ["mLow","mMedian","mHigh","mValue","mBuyLow","mBuy"].forEach(id=>document.getElementById(id).textContent="$0");
-  lastSuggestedValue = null;
+  ["mLow","mMedian","mHigh"].forEach(id=>document.getElementById(id).textContent="$0");
  }
+
+ const compsValue = (vals.length && subj) ? subj*percentile(vals,.5) : null;
+ const compsLow = (vals.length && subj) ? subj*Math.min(...vals) : null;
+ const suggestedValue = manual!=null ? manual : compsValue;
+
+ if(suggestedValue!=null){
+  document.getElementById("mValue").textContent=money(suggestedValue);
+  const buyLowBasis = manual!=null ? manual : compsLow;
+  document.getElementById("mBuyLow").textContent=money(Math.max(0,(buyLowBasis!=null?buyLowBasis:suggestedValue)-repairs-profit));
+  document.getElementById("mBuy").textContent=money(Math.max(0,suggestedValue-repairs-profit));
+ } else {
+  ["mValue","mBuyLow","mBuy"].forEach(id=>document.getElementById(id).textContent="$0");
+ }
+
+ const arvNote=document.getElementById("arvSourceNote");
+ if(manual!=null){
+  arvNote.textContent = `Using your manual ARV of ${money(manual)} instead of the comps-based value${compsValue!=null?` (which would be ${money(compsValue)})`:""} -- Conservative and Max Buy Price show the same number since a single manual value doesn't have a separate low/high range. Clear the Manual ARV field in Retail Comps to go back to comps-only.`;
+  arvNote.className="small";
+ } else {
+  arvNote.textContent="";
+  arvNote.className="small";
+ }
+
+ // Appraisal check: comps drive this specifically (never the manual ARV);
+ // WV Assessment's own total appraisal (when we have it) is only ever a
+ // flag against the comps-based number, per Elijah's client's own
+ // preference -- never blended into anything.
+ const appraisalCheck=document.getElementById("appraisalCheck");
+ appraisalCheck.textContent="";
+ appraisalCheck.className="small";
+ if(compsValue && lastMatch && lastMatch.comp_total_appraisal){
+  const diff=(compsValue-lastMatch.comp_total_appraisal)/lastMatch.comp_total_appraisal;
+  if(Math.abs(diff)>=.20){
+   appraisalCheck.textContent=`Comps-based suggested value is ${Math.round(Math.abs(diff)*100)}% ${diff>0?"higher":"lower"} than WV Assessment's total appraisal (${money(lastMatch.comp_total_appraisal)}) -- worth a second look before relying on either number alone.`;
+   appraisalCheck.className="small warn";
+  } else {
+   appraisalCheck.textContent=`Consistent with WV Assessment's total appraisal (${money(lastMatch.comp_total_appraisal)}).`;
+   appraisalCheck.className="small good";
+  }
+ }
+
+ lastSuggestedValue = suggestedValue;
  autoFillOffer();
- renderEvaluator(vals);
 }
 
 function renderEvaluator(vals){
