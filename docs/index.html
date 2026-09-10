@@ -176,6 +176,19 @@ a{color:#d7dce4}
 </div>
 <div class="small" id="appraisalCheck" style="margin-top:10px"></div>
 
+<div class="panelhead" style="margin-top:24px"><h2>Offer Generator</h2></div>
+<div class="notice">Comp/ARV Value &minus; Repairs &minus; Desired Profit &minus; Other Costs = Offer. ARV auto-fills from the suggested value above and Repairs auto-fills from the repair estimator, but every field here is a plain number you can type over -- the offer recalculates as soon as you change any of them.</div>
+<div class="evalgrid" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+ <input id="ogArv" placeholder="Comp/ARV value $" type="number" oninput="calcOffer()">
+ <input id="ogRepairs" placeholder="Repairs $" type="number" oninput="calcOffer()">
+ <input id="ogProfit" placeholder="Desired profit $" type="number" oninput="calcOffer()">
+ <input id="ogOtherCosts" placeholder="Other costs $" type="number" oninput="calcOffer()">
+</div>
+<div class="metrics" style="grid-template-columns:1fr">
+ <div class="metric"><div class="bidlabel">Offer</div><div class="bidvalue" id="ogOffer">$0</div></div>
+</div>
+<div class="small" id="ogNote" style="margin-top:8px"></div>
+
 <div class="panelhead" style="margin-top:20px"><h2>Comparable Sales</h2></div>
 <div class="comparegrid" id="compareGrid"></div>
 
@@ -222,6 +235,11 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let past = [], watch = [];
 let evalCandidates = [];
+// Set by analyzeProperty() whenever it computes a comps-based suggested
+// value -- the Offer Generator's ARV field auto-fills from this. Null
+// whenever there's no suggested value yet (no comps found, or no sq ft
+// entered), so the ARV field is left for manual entry instead.
+let lastSuggestedValue = null;
 
 const money=v=>v==null?"Unavailable":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
 const getPpsf=r=>(r.comp_sqft&&r.published_final_sold_price)?r.published_final_sold_price/r.comp_sqft:null;
@@ -419,16 +437,88 @@ function updateRehabEstimate(){
  costOut.textContent = lowCost===highCost ? money(lowCost) : money(lowCost)+" - "+money(highCost);
 }
 
+// Same low/high-midpoint math applyRehabEstimate() has always used, pulled
+// out so the Offer Generator's Repairs field can pull the same number
+// without needing the "Use This For Repairs" button clicked first.
+function currentRehabCost(){
+ const sqft=+document.getElementById("eSqft").value||0;
+ if(!sqft) return null;
+ const rate=currentRehabRate();
+ const mid=(rate.low+rate.high)/2;
+ return Math.round(sqft*mid);
+}
+
 function applyRehabEstimate(){
  const sqft=+document.getElementById("eSqft").value||0;
  const applied=document.getElementById("rehabApplied");
- if(!sqft){applied.textContent="Enter the subject sq ft above first.";applied.className="small bad";return;}
+ const estimate=currentRehabCost();
+ if(estimate==null){applied.textContent="Enter the subject sq ft above first.";applied.className="small bad";return;}
  const rate=currentRehabRate();
  const mid=(rate.low+rate.high)/2;
- const estimate=Math.round(sqft*mid);
  document.getElementById("eRepairs").value=estimate;
  applied.textContent=`Set Estimated Repairs to ${money(estimate)} (${sqft.toLocaleString()} sq ft × $${mid.toFixed(2)}/sq ft). Adjust "Estimated repairs $" above directly if you have a firmer number.`;
  applied.className="small";
+ autoFillOffer(); // keep the Offer Generator's Repairs field (if still empty) and the Offer total in sync
+}
+
+// Fills any currently-empty Offer Generator field from the best number this
+// screen already has -- ARV from the comps-based suggested value, Repairs
+// from the repair estimator (preferring "Estimated repairs $" if it's
+// already been set, otherwise computing it directly), Desired Profit from
+// "Target profit $" above. Never touches a field the user has already typed
+// something into, same rule the sq ft/property type auto-fill above uses.
+// Other Costs has no automatic source -- it's plain manual entry.
+function autoFillOffer(){
+ const arvInput=document.getElementById("ogArv");
+ if(!arvInput.value && lastSuggestedValue) arvInput.value=Math.round(lastSuggestedValue);
+
+ const repairsInput=document.getElementById("ogRepairs");
+ if(!repairsInput.value){
+  const eRepairsVal=+document.getElementById("eRepairs").value||0;
+  if(eRepairsVal){
+   repairsInput.value=eRepairsVal;
+  } else {
+   const rc=currentRehabCost();
+   if(rc!=null) repairsInput.value=rc;
+  }
+ }
+
+ const profitInput=document.getElementById("ogProfit");
+ if(!profitInput.value){
+  const eProfitVal=+document.getElementById("eProfit").value||0;
+  if(eProfitVal) profitInput.value=eProfitVal;
+ }
+
+ calcOffer();
+}
+
+// Pure calculation off whatever's currently in the four Offer Generator
+// fields -- never overwrites another field, so typing in one never stomps
+// on a number already sitting in another. Comp/ARV Value - Repairs -
+// Desired Profit - Other Costs = Offer, exactly as specified -- no
+// percentages anywhere in this math.
+function calcOffer(){
+ const arv=+document.getElementById("ogArv").value||0;
+ const repairs=+document.getElementById("ogRepairs").value||0;
+ const profit=+document.getElementById("ogProfit").value||0;
+ const otherCosts=+document.getElementById("ogOtherCosts").value||0;
+ const offer=arv-repairs-profit-otherCosts;
+
+ const offerOut=document.getElementById("ogOffer");
+ offerOut.textContent = offer<0 ? "-"+money(Math.abs(offer)) : money(offer);
+ offerOut.classList.toggle("bad", arv>0 && offer<0);
+
+ const note=document.getElementById("ogNote");
+ if(!arv){
+  note.textContent='Enter or auto-fill a Comp/ARV value above to calculate an offer.';
+  note.className="small";
+ } else if(offer<0){
+  note.textContent="Repairs, desired profit, and other costs add up to more than the ARV at these numbers -- this deal doesn't work as-is.";
+  note.className="small bad";
+ } else {
+  note.textContent="";
+  note.className="small";
+ }
 }
 
 function normalizeAddress(s){
@@ -532,6 +622,7 @@ function analyzeProperty(){
   document.getElementById("mValue").textContent=subj?money(suggestedValue):"$0";
   document.getElementById("mBuyLow").textContent=subj?money(Math.max(0,subj*low-repairs-profit)):"$0";
   document.getElementById("mBuy").textContent=subj?money(Math.max(0,subj*med-repairs-profit)):"$0";
+  lastSuggestedValue = subj ? suggestedValue : null;
 
   // Appraisal check: comps drive the suggested value; WV Assessment's own
   // total appraisal (when we have it) is only ever a flag against that
@@ -548,7 +639,9 @@ function analyzeProperty(){
   }
  } else {
   ["mLow","mMedian","mHigh","mValue","mBuyLow","mBuy"].forEach(id=>document.getElementById(id).textContent="$0");
+  lastSuggestedValue = null;
  }
+ autoFillOffer();
  renderEvaluator(vals);
 }
 
