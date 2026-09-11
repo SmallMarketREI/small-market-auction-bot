@@ -49,6 +49,9 @@ th{color:var(--muted);background:var(--panel);position:sticky;top:0;z-index:1}
 .primary{background:#e5e7eb;color:#111317;border:0;border-radius:9px;padding:10px 14px;font-weight:800;cursor:pointer;margin-top:12px}
 .metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:14px}
 .metric{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+.offerhero{background:var(--panel2);border:2px solid var(--line);border-radius:14px;padding:22px;text-align:center;margin-top:14px}
+.offerhero .bidlabel{font-size:13px;letter-spacing:.06em;text-transform:uppercase}
+.offerhero .bidvalue{font-size:42px;margin-top:8px}
 .price{font-size:24px;font-weight:800;margin:10px 0 3px}
 .marketlabel{font-size:13px;font-weight:800;margin-bottom:4px}.marketdesc{font-size:11px;color:var(--muted);line-height:1.4}
 a{color:#d7dce4}
@@ -117,32 +120,36 @@ a{color:#d7dce4}
 
 <section id="evaluator" class="section">
 <div class="panelhead"><h2>Property Evaluator</h2></div>
-<div class="notice">Enter a subject address once -- this pulls together our auction comps, WV Assessment/appraisal data (when we already have it on file for this address), the repair estimate below, and a suggested value + buy range, all in one place.</div>
+<div class="notice">Laid out in the order we actually work a deal: Property Info, then ARV/Value, then Repairs, then one Offer Generator that turns those three into a single Generated Offer. Auction comps, WV Assessment/appraisal data, and (eventually) retail comps sit underneath as supporting market data -- there to help judge the offer, not to compete with it.</div>
+
+<div class="panelhead" style="margin-top:24px"><h2>Property Info</h2></div>
 <div class="evalgrid">
  <input id="eAddress" placeholder="Subject address">
  <input id="eCity" placeholder="City">
  <input id="eZip" placeholder="ZIP">
  <select id="eType"><option>House</option><option>Land</option><option>Mobile Home</option><option>Commercial</option></select>
  <input id="eSqft" placeholder="Subject sq ft" type="number" oninput="updateRehabEstimate()">
- <input id="eRepairs" placeholder="Estimated repairs $" type="number" oninput="renderValueMetrics()">
- <input id="eProfit" placeholder="Target profit $" type="number" oninput="renderValueMetrics()">
 </div>
 <button class="primary" onclick="analyzeProperty()">Analyze Property</button>
+<div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
 
-<div class="panelhead" style="margin-top:24px"><h2>Property &amp; Assessment Data</h2></div>
-<div class="small" id="assessmentStatus" style="margin-bottom:10px">Enter an address above and click "Analyze Property" to check it against our records.</div>
-<div class="metrics" id="assessmentMetrics" style="display:none">
- <div class="metric"><div class="bidlabel">Total Appraisal</div><div class="bidvalue" id="aTotal">--</div></div>
- <div class="metric"><div class="bidlabel">Land Appraisal</div><div class="bidvalue" id="aLand">--</div></div>
- <div class="metric"><div class="bidlabel">Building Appraisal</div><div class="bidvalue" id="aBuilding">--</div></div>
- <div class="metric"><div class="bidlabel">Year Built</div><div class="bidvalue" id="aYear">--</div></div>
- <div class="metric"><div class="bidlabel">Beds / Baths</div><div class="bidvalue" id="aBeds">--</div></div>
- <div class="metric"><div class="bidlabel">Deeded Acres</div><div class="bidvalue" id="aAcres">--</div></div>
+<div class="panelhead" style="margin-top:28px"><h2>ARV / Value</h2></div>
+<div class="notice">Suggested Value is comps-led: median $/sq ft from verified auction comps in the same ZIP code &times; subject sq ft (only falls back to city if no ZIP is entered -- comps never cross ZIP codes when one's on file). Enter a Manual ARV below any time you want to use your own number instead -- useful until retail comps are wired in.</div>
+<div class="metrics" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+ <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
+ <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="mLow">$0</div></div>
+ <div class="metric"><div class="bidlabel">Median PPSF</div><div class="bidvalue" id="mMedian">$0</div></div>
+ <div class="metric"><div class="bidlabel">High PPSF</div><div class="bidvalue" id="mHigh">$0</div></div>
+ <div class="metric"><div class="bidlabel">Suggested Value</div><div class="bidvalue" id="mValue">$0</div></div>
 </div>
-<div class="small" id="assessmentSource" style="margin-top:10px"></div>
+<div class="evalgrid" style="grid-template-columns:minmax(0,1fr);margin-top:12px">
+ <input id="manualArv" placeholder="Manual ARV $ (optional -- overrides Suggested Value and the Offer Generator's ARV below)" type="number" oninput="renderValueMetrics()">
+</div>
+<div class="small" id="arvSourceNote" style="margin-top:10px"></div>
+<div class="small" id="appraisalCheck" style="margin-top:6px"></div>
 
-<div class="panelhead" style="margin-top:24px"><h2>Repair Cost Calculator</h2></div>
-<div class="notice">Square footage &times; cost per sq ft = a rough rehab estimate. Uses the "Subject sq ft" entered above -- pick a condition level, or type your own cost per sq ft if a house doesn't fit one of the labels.</div>
+<div class="panelhead" style="margin-top:28px"><h2>Repairs</h2></div>
+<div class="notice">Square footage &times; cost per sq ft = a rough rehab estimate, using the subject sq ft above. Pick a condition level, or type your own cost per sq ft if a house doesn't fit one of the labels -- this feeds straight into the Offer Generator's Repairs field below.</div>
 <div class="evalgrid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
  <select id="rehabLevel" onchange="updateRehabEstimate()">
   <option value="0">Very Light -- $25/sq ft</option>
@@ -159,45 +166,40 @@ a{color:#d7dce4}
  <div class="metric"><div class="bidlabel">Rate Used</div><div class="bidvalue" id="rehabRateOut">$0/sq ft</div></div>
  <div class="metric"><div class="bidlabel">Estimated Rehab Cost</div><div class="bidvalue" id="rehabCostOut">Enter sq ft above</div></div>
 </div>
-<button class="primary" onclick="applyRehabEstimate()">Use This For Repairs</button>
-<div class="small" id="rehabApplied" style="margin-top:8px"></div>
-<div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
 
-<div class="panelhead" style="margin-top:24px"><h2>Suggested Value &amp; Buy Range</h2></div>
-<div class="notice">Suggested value is comps-led: median $/sq ft from verified auction comps &times; subject sq ft. WV Assessment's appraisal (above, when we have it) is shown as a check against that number, not blended into it -- if the two disagree by a lot, that's flagged below so it gets a second look rather than silently averaged away.</div>
-<div class="metrics" style="grid-template-columns:repeat(4,minmax(0,1fr))">
- <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
- <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="mLow">$0</div></div>
- <div class="metric"><div class="bidlabel">Median PPSF</div><div class="bidvalue" id="mMedian">$0</div></div>
- <div class="metric"><div class="bidlabel">High PPSF</div><div class="bidvalue" id="mHigh">$0</div></div>
- <div class="metric"><div class="bidlabel">Suggested Value</div><div class="bidvalue" id="mValue">$0</div></div>
- <div class="metric"><div class="bidlabel">Conservative Buy Price</div><div class="bidvalue" id="mBuyLow">$0</div></div>
- <div class="metric"><div class="bidlabel">Max Buy Price</div><div class="bidvalue" id="mBuy">$0</div></div>
-</div>
-<div class="small" id="arvSourceNote" style="margin-top:10px"></div>
-<div class="small" id="appraisalCheck" style="margin-top:6px"></div>
-
-<div class="panelhead" style="margin-top:24px"><h2>Offer Generator</h2></div>
-<div class="notice">Comp/ARV Value &minus; Repairs &minus; Desired Profit &minus; Other Costs = Offer. ARV auto-fills from the suggested value above and Repairs auto-fills from the repair estimator, but every field here is a plain number you can type over -- the offer recalculates as soon as you change any of them.</div>
+<div class="panelhead" style="margin-top:28px"><h2>Offer Generator</h2></div>
+<div class="notice">Comp/ARV Value &minus; Repairs &minus; Desired Profit &minus; Other Costs = Generated Offer. ARV tracks ARV/Value above and Repairs tracks the calculator above, live -- type over either one and it's yours until you clear it back to empty. Desired Profit and Other Costs are yours to set.</div>
 <div class="evalgrid" style="grid-template-columns:repeat(4,minmax(0,1fr))">
- <input id="ogArv" placeholder="Comp/ARV value $" type="number" oninput="calcOffer()">
- <input id="ogRepairs" placeholder="Repairs $" type="number" oninput="calcOffer()">
+ <input id="ogArv" placeholder="Comp/ARV value $" type="number" oninput="onOfferFieldInput('ogArv')">
+ <input id="ogRepairs" placeholder="Repairs $" type="number" oninput="onOfferFieldInput('ogRepairs')">
  <input id="ogProfit" placeholder="Desired profit $" type="number" oninput="calcOffer()">
  <input id="ogOtherCosts" placeholder="Other costs $" type="number" oninput="calcOffer()">
 </div>
-<div class="metrics" style="grid-template-columns:1fr">
- <div class="metric"><div class="bidlabel">Offer</div><div class="bidvalue" id="ogOffer">$0</div></div>
+<div class="offerhero">
+ <div class="bidlabel">Generated Offer</div>
+ <div class="bidvalue" id="ogOffer">$0</div>
 </div>
 <div class="small" id="ogNote" style="margin-top:8px"></div>
 
-<div class="panelhead" style="margin-top:20px"><h2>Comparable Sales</h2></div>
+<div class="panelhead" style="margin-top:28px"><h2>Comparable Sales</h2></div>
+<div class="notice">Supporting data -- the verified auction comps behind the ARV/Value numbers above: same ZIP code (or city, only if no ZIP was entered), same property type, within 30% of subject sq ft.</div>
 <div class="comparegrid" id="compareGrid"></div>
 
-<div class="panelhead" style="margin-top:20px"><h2>Retail Comps</h2></div>
-<div class="notice">Not wired up yet -- once retail-market comps are added as a data source, they'll show here alongside the auction comps above. Until then, enter your own ARV below (from a retail comp you've pulled yourself, an appraisal, or your own judgment) and it takes over Suggested Value, Buy Range, and the Offer Generator's ARV everywhere above -- leave it blank to keep using the comps-based number.</div>
-<div class="evalgrid" style="grid-template-columns:minmax(0,1fr)">
- <input id="manualArv" placeholder="Manual ARV $ (optional -- overrides the comps-based value everywhere above)" type="number" oninput="renderValueMetrics()">
+<div class="panelhead" style="margin-top:28px"><h2>Property &amp; Assessment Data</h2></div>
+<div class="notice">Supporting data -- WV Assessment/appraisal info on file for this address, when we have it, shown here for reference alongside the comps above.</div>
+<div class="small" id="assessmentStatus" style="margin-bottom:10px">Enter an address above and click "Analyze Property" to check it against our records.</div>
+<div class="metrics" id="assessmentMetrics" style="display:none">
+ <div class="metric"><div class="bidlabel">Total Appraisal</div><div class="bidvalue" id="aTotal">--</div></div>
+ <div class="metric"><div class="bidlabel">Land Appraisal</div><div class="bidvalue" id="aLand">--</div></div>
+ <div class="metric"><div class="bidlabel">Building Appraisal</div><div class="bidvalue" id="aBuilding">--</div></div>
+ <div class="metric"><div class="bidlabel">Year Built</div><div class="bidvalue" id="aYear">--</div></div>
+ <div class="metric"><div class="bidlabel">Beds / Baths</div><div class="bidvalue" id="aBeds">--</div></div>
+ <div class="metric"><div class="bidlabel">Deeded Acres</div><div class="bidvalue" id="aAcres">--</div></div>
 </div>
+<div class="small" id="assessmentSource" style="margin-top:10px"></div>
+
+<div class="panelhead" style="margin-top:28px"><h2>Retail Comps</h2></div>
+<div class="notice">Not wired up yet -- once retail-market comps are added as a data source, they'll show here alongside the auction comps above and factor into ARV/Value the same way. Until then, use the Manual ARV field in ARV/Value above.</div>
 </section>
 
 <section id="unsold" class="section">
@@ -249,6 +251,13 @@ let lastSuggestedValue = null;
 // appraisal check whenever repairs/profit/manual ARV change, without
 // needing another full re-analysis.
 let lastMatch = null;
+// Whether the Offer Generator's ARV/Repairs fields have been typed into
+// directly -- while false, autoFillOffer() keeps them tracking their live
+// upstream source (ARV/Value's suggested value, and the Repairs
+// calculator); set true the moment the user types something in, and back
+// to false if they clear the field to empty. See onOfferFieldInput().
+let ogArvManual = false;
+let ogRepairsManual = false;
 
 const money=v=>v==null?"Unavailable":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
 const getPpsf=r=>(r.comp_sqft&&r.published_final_sold_price)?r.published_final_sold_price/r.comp_sqft:null;
@@ -304,9 +313,13 @@ function localPeerValues(r){
    .filter(usableComp)
    .filter(x=>x.property_type===r.property_type)
    .filter(x=>{
-      const sameZip=r.zip && x.zip===r.zip;
-      const sameCity=r.city && (x.city||"").toLowerCase()===r.city.toLowerCase();
-      return sameZip || sameCity;
+      // Comps must stay in the same ZIP code -- city alone can span very
+      // different micro-markets within it, so it's only used as a fallback
+      // when the record itself has no ZIP on file, never blended in
+      // alongside a ZIP match.
+      if(r.zip) return x.zip===r.zip;
+      if(r.city) return (x.city||"").toLowerCase()===r.city.toLowerCase();
+      return false;
    })
    .map(getPpsf)
    .filter(Boolean);
@@ -441,14 +454,17 @@ function updateRehabEstimate(){
   : (rate.low===rate.high ? "$"+rate.low+"/sq ft" : "$"+rate.low+"-$"+rate.high+"/sq ft");
  const sqft=+document.getElementById("eSqft").value||0;
  const costOut=document.getElementById("rehabCostOut");
- if(!sqft){costOut.textContent="Enter sq ft above";return;}
- const lowCost=sqft*rate.low, highCost=sqft*rate.high;
- costOut.textContent = lowCost===highCost ? money(lowCost) : money(lowCost)+" - "+money(highCost);
+ if(!sqft){
+  costOut.textContent="Enter sq ft above";
+ } else {
+  const lowCost=sqft*rate.low, highCost=sqft*rate.high;
+  costOut.textContent = lowCost===highCost ? money(lowCost) : money(lowCost)+" - "+money(highCost);
+ }
+ // The Offer Generator's Repairs field tracks this estimate live (unless
+ // the user has typed their own number into it) -- no "apply" step needed.
+ autoFillOffer();
 }
 
-// Same low/high-midpoint math applyRehabEstimate() has always used, pulled
-// out so the Offer Generator's Repairs field can pull the same number
-// without needing the "Use This For Repairs" button clicked first.
 // The Retail Comps section's manual-ARV field -- returns null (not 0) when
 // empty so callers can tell "no manual override" apart from "override of
 // zero," and fall back to the comps-based value.
@@ -465,51 +481,36 @@ function currentRehabCost(){
  return Math.round(sqft*mid);
 }
 
-function applyRehabEstimate(){
- const sqft=+document.getElementById("eSqft").value||0;
- const applied=document.getElementById("rehabApplied");
- const estimate=currentRehabCost();
- if(estimate==null){applied.textContent="Enter the subject sq ft above first.";applied.className="small bad";return;}
- const rate=currentRehabRate();
- const mid=(rate.low+rate.high)/2;
- document.getElementById("eRepairs").value=estimate;
- applied.textContent=`Set Estimated Repairs to ${money(estimate)} (${sqft.toLocaleString()} sq ft × $${mid.toFixed(2)}/sq ft). Adjust "Estimated repairs $" above directly if you have a firmer number.`;
- applied.className="small";
- // Setting eRepairs.value above doesn't fire its own oninput handler, so
- // explicitly refresh Buy Range (which reads eRepairs) and, in turn via
- // renderValueMetrics(), the Offer Generator's auto-fill.
- renderValueMetrics();
-}
-
-// Fills any currently-empty Offer Generator field from the best number this
-// screen already has -- ARV from the comps-based suggested value, Repairs
-// from the repair estimator (preferring "Estimated repairs $" if it's
-// already been set, otherwise computing it directly), Desired Profit from
-// "Target profit $" above. Never touches a field the user has already typed
-// something into, same rule the sq ft/property type auto-fill above uses.
-// Other Costs has no automatic source -- it's plain manual entry.
+// Keeps the Offer Generator's ARV and Repairs fields tracking their live
+// upstream source (ARV/Value's suggested value, and the Repairs
+// calculator above) for as long as the user hasn't typed directly into
+// them -- see onOfferFieldInput(), which flips ogArvManual/ogRepairsManual
+// the moment they do. Desired Profit and Other Costs have no upstream
+// source at all -- they're always plain manual entry, so calcOffer() just
+// reads whatever's currently in them.
 function autoFillOffer(){
  const arvInput=document.getElementById("ogArv");
- if(!arvInput.value && lastSuggestedValue) arvInput.value=Math.round(lastSuggestedValue);
+ if(!ogArvManual) arvInput.value = lastSuggestedValue!=null ? Math.round(lastSuggestedValue) : "";
 
  const repairsInput=document.getElementById("ogRepairs");
- if(!repairsInput.value){
-  const eRepairsVal=+document.getElementById("eRepairs").value||0;
-  if(eRepairsVal){
-   repairsInput.value=eRepairsVal;
-  } else {
-   const rc=currentRehabCost();
-   if(rc!=null) repairsInput.value=rc;
-  }
- }
-
- const profitInput=document.getElementById("ogProfit");
- if(!profitInput.value){
-  const eProfitVal=+document.getElementById("eProfit").value||0;
-  if(eProfitVal) profitInput.value=eProfitVal;
+ if(!ogRepairsManual){
+  const rc=currentRehabCost();
+  repairsInput.value = rc!=null ? rc : "";
  }
 
  calcOffer();
+}
+
+// Called by the Offer Generator's ARV and Repairs fields on input. Typing
+// something in marks that field manual, so the autoFillOffer() call below
+// leaves it alone; clearing it back to empty un-marks it, so the same call
+// immediately refills it from its live source instead of just sitting
+// empty until something else happens to trigger a refresh.
+function onOfferFieldInput(id){
+ const isEmpty = document.getElementById(id).value === "";
+ if(id==="ogArv") ogArvManual = !isEmpty;
+ if(id==="ogRepairs") ogRepairsManual = !isEmpty;
+ autoFillOffer();
 }
 
 // Pure calculation off whatever's currently in the four Offer Generator
@@ -610,7 +611,15 @@ function analyzeProperty(){
  evalCandidates = past
   .filter(usableComp)
   .filter(r=>r.property_type===type)
-  .filter(r=>((zip&&r.zip===zip)||(city&&(r.city||"").toLowerCase()===city)))
+  .filter(r=>{
+    // Comps must stay in the same ZIP code -- a ZIP entered above is a
+    // hard requirement, never loosened by an OR against city (city alone
+    // can span very different micro-markets within it). City is only used
+    // as a fallback when no ZIP was entered at all.
+    if(zip) return r.zip===zip;
+    if(city) return (r.city||"").toLowerCase()===city;
+    return false;
+  })
   .map(r=>({...r,sizeDiff:subj?Math.abs(r.comp_sqft-subj)/subj:null}))
   .filter(r=>r.sizeDiff===null || r.sizeDiff<=.30)
   .sort((a,b)=>{
@@ -631,28 +640,23 @@ function analyzeProperty(){
  renderEvaluator(evalCandidates.map(getPpsf).filter(Boolean));
 }
 
-// Suggested Value, Buy Range, the appraisal check, and the Offer
-// Generator's ARV auto-fill all come from here. Comps-based value is the
-// default (median $/sq ft from verified comps x subject sq ft); a manual
-// ARV entered in the Retail Comps section (a stand-in until real retail
-// comps are wired up) takes over everywhere on this screen the moment
-// it's filled in -- Suggested Value, both buy prices, and what the Offer
-// Generator auto-fills -- and reverts to the comps-based number the moment
-// it's cleared. The appraisal check underneath, though, always compares
-// the comps-based number against WV Assessment specifically -- a manual
-// ARV is your own number, not a second independent estimate to flag the
-// comps against.
+// Suggested Value and the appraisal check come from here, and it's what
+// keeps the Offer Generator's ARV field fed (via autoFillOffer() at the
+// end). Comps-based value is the default (median $/sq ft from verified
+// comps x subject sq ft, same ZIP code only); a manual ARV entered above
+// takes over the moment it's filled in and reverts to the comps-based
+// number the moment it's cleared. The appraisal check underneath, though,
+// always compares the comps-based number against WV Assessment
+// specifically -- a manual ARV is your own number, not a second
+// independent estimate to flag the comps against.
 // Called after every Analyze Property click, and directly (without a full
-// re-analysis) whenever Estimated Repairs, Target Profit, or Manual ARV
-// change, so Buy Range and the Offer Generator always reflect what's
-// currently on screen.
+// re-analysis) whenever Manual ARV changes, so the Offer Generator always
+// reflects what's currently on screen.
 function renderValueMetrics(){
  const vals=evalCandidates.map(getPpsf).filter(Boolean);
  document.getElementById("mFound").textContent=evalCandidates.length;
 
  const subj=+document.getElementById("eSqft").value||0;
- const repairs=+document.getElementById("eRepairs").value||0;
- const profit=+document.getElementById("eProfit").value||0;
  const manual=manualArvValue();
 
  if(vals.length){
@@ -665,21 +669,12 @@ function renderValueMetrics(){
  }
 
  const compsValue = (vals.length && subj) ? subj*percentile(vals,.5) : null;
- const compsLow = (vals.length && subj) ? subj*Math.min(...vals) : null;
  const suggestedValue = manual!=null ? manual : compsValue;
-
- if(suggestedValue!=null){
-  document.getElementById("mValue").textContent=money(suggestedValue);
-  const buyLowBasis = manual!=null ? manual : compsLow;
-  document.getElementById("mBuyLow").textContent=money(Math.max(0,(buyLowBasis!=null?buyLowBasis:suggestedValue)-repairs-profit));
-  document.getElementById("mBuy").textContent=money(Math.max(0,suggestedValue-repairs-profit));
- } else {
-  ["mValue","mBuyLow","mBuy"].forEach(id=>document.getElementById(id).textContent="$0");
- }
+ document.getElementById("mValue").textContent = suggestedValue!=null ? money(suggestedValue) : "$0";
 
  const arvNote=document.getElementById("arvSourceNote");
  if(manual!=null){
-  arvNote.textContent = `Using your manual ARV of ${money(manual)} instead of the comps-based value${compsValue!=null?` (which would be ${money(compsValue)})`:""} -- Conservative and Max Buy Price show the same number since a single manual value doesn't have a separate low/high range. Clear the Manual ARV field in Retail Comps to go back to comps-only.`;
+  arvNote.textContent = `Using your manual ARV of ${money(manual)} instead of the comps-based value${compsValue!=null?` (which would be ${money(compsValue)})`:""}. Clear the Manual ARV field above to go back to comps-only.`;
   arvNote.className="small";
  } else {
   arvNote.textContent="";
