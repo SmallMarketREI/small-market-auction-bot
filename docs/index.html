@@ -120,7 +120,7 @@ a{color:#d7dce4}
 
 <section id="evaluator" class="section">
 <div class="panelhead"><h2>Property Evaluator</h2></div>
-<div class="notice">Laid out in the order we actually work a deal: Property Info, then ARV/Value, then Repairs, then one Offer Generator that turns those three into a single Generated Offer. Auction comps, WV Assessment/appraisal data, and (eventually) retail comps sit underneath as supporting market data -- there to help judge the offer, not to compete with it.</div>
+<div class="notice">Laid out in the order we actually work a deal: Property Info, then ARV/Value, then Repairs, then one Offer Generator that turns those three into a single Generated Offer. Auction comps, WV Assessment/appraisal data, and retail comps sit underneath as supporting market data -- there to help judge the offer, not to compete with it.</div>
 
 <div class="panelhead" style="margin-top:24px"><h2>Property Info</h2></div>
 <div class="evalgrid">
@@ -134,7 +134,7 @@ a{color:#d7dce4}
 <div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
 
 <div class="panelhead" style="margin-top:28px"><h2>ARV / Value</h2></div>
-<div class="notice">Suggested Value is comps-led: median $/sq ft from verified auction comps in the same ZIP code &times; subject sq ft (only falls back to city if no ZIP is entered -- comps never cross ZIP codes when one's on file). Enter a Manual ARV below any time you want to use your own number instead -- useful until retail comps are wired in.</div>
+<div class="notice">Suggested Value is comps-led: median $/sq ft from verified auction comps AND sold retail comps in the same ZIP code &times; subject sq ft (only falls back to city if no ZIP is entered -- comps never cross ZIP codes when one's on file). Enter a Manual ARV below any time you want to use your own number instead.</div>
 <div class="metrics" style="grid-template-columns:repeat(5,minmax(0,1fr))">
  <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
  <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="mLow">$0</div></div>
@@ -199,7 +199,9 @@ a{color:#d7dce4}
 <div class="small" id="assessmentSource" style="margin-top:10px"></div>
 
 <div class="panelhead" style="margin-top:28px"><h2>Retail Comps</h2></div>
-<div class="notice">Not wired up yet -- once retail-market comps are added as a data source, they'll show here alongside the auction comps above and factor into ARV/Value the same way. Until then, use the Manual ARV field in ARV/Value above.</div>
+<div class="notice">Nearby retail (non-auction) properties from DealMachine -- same ZIP code, same property type as the subject. Sold comps below are blended into the Low/Median/High/Suggested Value numbers in ARV/Value above, right alongside the auction comps. Active and Pending listings are shown separately, for context only -- they're not sales yet, so they never factor into the value math.</div>
+<div class="small" id="retailCompsStatus" style="margin-bottom:10px"></div>
+<div class="comparegrid" id="retailCompsGrid"></div>
 </section>
 
 <section id="unsold" class="section">
@@ -239,8 +241,9 @@ const SUPABASE_ANON_KEY = "sb_publishable_tlLhHecuIMJdbVwBpucZhw_HypV4Gsl";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let past = [], watch = [];
+let past = [], watch = [], retail = [];
 let evalCandidates = [];
+let evalRetailSold = [], evalRetailCurrent = [];
 // Set by analyzeProperty() whenever it computes a comps-based suggested
 // value -- the Offer Generator's ARV field auto-fills from this. Null
 // whenever there's no suggested value yet (no comps found, or no sq ft
@@ -273,6 +276,17 @@ const isLandOnly=r=>r.comp_sqft==null && r.acreage!=null;
 // property-class mismatch) stays visible in Past Auctions but is excluded
 // from every Low/Median/High PPSF calculation until it's cleared.
 const usableComp=r=>r.published_final_sold_price!=null && r.comp_sqft!=null && !r.review_flag;
+
+// Retail comps (DealMachine) use their own property-type label ("Single
+// Family") instead of the auction data's "House" -- map it here so a single
+// property-type filter works against both pools everywhere they're blended.
+const DM_PROPERTY_TYPE_MAP = {"Single Family":"House"};
+const retailPropertyType=r=>DM_PROPERTY_TYPE_MAP[r.property_type] || r.property_type;
+const getRetailPpsf=r=>(r.living_area_sqft&&r.last_sale_price)?r.last_sale_price/r.living_area_sqft:null;
+// Only a completed sale is a real comp -- Active/Pending listings are asking
+// prices, not sale prices, so they're shown for context but never blended
+// into Low/Median/High/Suggested Value the way a closed sale is.
+const usableRetailSoldComp=r=>r.comp_status==="sold" && r.living_area_sqft!=null && r.last_sale_price!=null && r.last_sale_price>0;
 const zillowUrl=r=>{
  const address=[r.address,r.city,r.state,r.zip].filter(Boolean).join(" ");
  return "https://www.zillow.com/homes/"+encodeURIComponent(address)+"_rb/";
@@ -636,8 +650,22 @@ function analyzeProperty(){
     return (b.auction_date||"").localeCompare(a.auction_date||"");
   });
 
+ // Retail comps (DealMachine) get the exact same same-ZIP-first, same-city-
+ // fallback rule as auction comps -- never a looser match just because
+ // they're from a different data source.
+ const retailZipCityMatch = r => {
+   if(zip) return r.zip===zip;
+   if(city) return (r.city||"").toLowerCase()===city;
+   return false;
+ };
+ const retailTypeMatch = r => retailPropertyType(r)===type;
+ evalRetailSold = retail.filter(usableRetailSoldComp).filter(retailTypeMatch).filter(retailZipCityMatch);
+ evalRetailCurrent = retail.filter(r=>r.comp_status==="active"||r.comp_status==="pending")
+   .filter(retailTypeMatch).filter(retailZipCityMatch);
+
  renderValueMetrics();
  renderEvaluator(evalCandidates.map(getPpsf).filter(Boolean));
+ renderRetailComps();
 }
 
 // Suggested Value and the appraisal check come from here, and it's what
@@ -653,8 +681,13 @@ function analyzeProperty(){
 // re-analysis) whenever Manual ARV changes, so the Offer Generator always
 // reflects what's currently on screen.
 function renderValueMetrics(){
- const vals=evalCandidates.map(getPpsf).filter(Boolean);
- document.getElementById("mFound").textContent=evalCandidates.length;
+ // Low/Median/High/Suggested Value are computed from auction comps AND sold
+ // retail comps together, one blended pool -- both are real closed sales in
+ // the same ZIP code and property type, so there's no reason to treat one
+ // as more authoritative than the other. Active/Pending retail listings are
+ // never included here (see usableRetailSoldComp).
+ const vals=evalCandidates.map(getPpsf).filter(Boolean).concat(evalRetailSold.map(getRetailPpsf).filter(Boolean));
+ document.getElementById("mFound").textContent=evalCandidates.length+evalRetailSold.length;
 
  const subj=+document.getElementById("eSqft").value||0;
  const manual=manualArvValue();
@@ -718,6 +751,48 @@ function renderEvaluator(vals){
  });
 }
 
+function renderRetailComps(){
+ const grid=document.getElementById("retailCompsGrid");
+ const status=document.getElementById("retailCompsStatus");
+ grid.innerHTML="";
+ if(!retail.length){
+  status.textContent="No retail comps loaded yet -- this data source hasn't been seeded for this Supabase project, or the retail_comps table doesn't exist yet.";
+  status.className="small";
+  return;
+ }
+ if(!evalRetailSold.length && !evalRetailCurrent.length){
+  status.textContent="No retail comps on file yet for this ZIP code, city, and property type combination.";
+  status.className="small";
+  return;
+ }
+ status.textContent=`${evalRetailSold.length} sold retail comp${evalRetailSold.length===1?"":"s"} (blended into ARV/Value above) and ${evalRetailCurrent.length} current listing${evalRetailCurrent.length===1?"":"s"} (context only).`;
+ status.className="small";
+
+ const renderCard=(r,kind)=>{
+  const div=document.createElement("div");div.className="comp";
+  const sqft=r.living_area_sqft?Number(r.living_area_sqft).toLocaleString():"Unknown";
+  const bedsBaths=[r.num_bedrooms!=null?`${r.num_bedrooms} bd`:null, r.num_bathrooms!=null?`${r.num_bathrooms} ba`:null].filter(Boolean).join(" / ");
+  let priceLine, ppsfLine, metaLine;
+  if(kind==="sold"){
+   const p=getRetailPpsf(r);
+   priceLine=money(r.last_sale_price);
+   ppsfLine=p!=null?`<div class="meta">Retail PPSF: $${p.toFixed(2)}</div>`:"";
+   metaLine=`${r.last_sale_date||"Sale date unknown"} · Sold (retail)`;
+  } else {
+   priceLine=r.list_price!=null?money(r.list_price)+" (asking)":"Price unavailable";
+   ppsfLine="";
+   metaLine=`${r.listing_date?`Listed ${r.listing_date}`:""} · ${r.comp_status==="pending"?"Pending":"Active"} listing (not blended into value)`;
+  }
+  div.innerHTML=`<div class="comptitle">${[r.address,r.city].filter(Boolean).join(", ")}</div><div class="meta">${metaLine}</div><div class="price">${priceLine}</div>
+  <div class="county"><div class="meta">Sq Ft: ${sqft}</div>${bedsBaths?`<div class="meta">${bedsBaths}</div>`:""}${ppsfLine}<div class="meta">Source: DealMachine</div></div>
+  <div style="margin-top:10px;display:flex;gap:8px"><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener" title="Opens a Zillow search for this address. Zillow's own listing (if any) is independent of our data and may differ.">Search Zillow (unverified)</a></div>`;
+  grid.appendChild(div);
+ };
+
+ evalRetailSold.forEach(r=>renderCard(r,"sold"));
+ evalRetailCurrent.forEach(r=>renderCard(r,"current"));
+}
+
 const UNSOLD_OPPORTUNITY_STATUSES = ["Cancelled","Postponed","Unsold","Needs Review"];
 
 function renderStats(){
@@ -759,14 +834,26 @@ function renderReview(){
 async function loadData(){
  const subtitle = document.getElementById("subtitle");
  try {
-  const [pastResp, watchResp] = await Promise.all([
+  const [pastResp, watchResp, retailResp] = await Promise.all([
     sb.from("past_auctions").select("*").order("auction_date", {ascending:false}).limit(2000),
     sb.from("watch_auctions").select("*").order("auction_date", {ascending:true}).limit(500),
+    // retail_comps is a newer, optional table -- if it doesn't exist yet on
+    // this Supabase project (schema_v6.sql not applied), fail soft instead
+    // of taking down the whole dashboard the way a past_auctions/
+    // watch_auctions error does.
+    sb.from("retail_comps").select("*").order("fetched_at", {ascending:false}).limit(5000)
+      .then(r=>r).catch(e=>({data:null,error:e})),
   ]);
   if (pastResp.error) throw pastResp.error;
   if (watchResp.error) throw watchResp.error;
   past = pastResp.data || [];
   watch = watchResp.data || [];
+  if (retailResp.error) {
+   console.warn("retail_comps not loaded (table may not exist yet -- see supabase/schema_v6.sql):", retailResp.error);
+   retail = [];
+  } else {
+   retail = retailResp.data || [];
+  }
 
   initFilters();
   renderStats();
@@ -775,7 +862,7 @@ async function loadData(){
   renderWatch();
   renderUnsold();
   renderReview();
-  subtitle.textContent = `Newest auction data, enriched comps, and verified bidding links. Loaded ${past.length} past + ${watch.length} watch records.`;
+  subtitle.textContent = `Newest auction data, enriched comps, and verified bidding links. Loaded ${past.length} past + ${watch.length} watch records${retail.length?` + ${retail.length} retail comps`:""}.`;
  } catch (err) {
   console.error(err);
   subtitle.textContent = "Could not load data from Supabase -- check SUPABASE_URL/SUPABASE_ANON_KEY at the top of this file, and that the schema + RLS policies from supabase/schema.sql are applied.";
