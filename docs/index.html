@@ -120,7 +120,7 @@ a{color:#d7dce4}
 
 <section id="evaluator" class="section">
 <div class="panelhead"><h2>Property Evaluator</h2></div>
-<div class="notice">Laid out in the order we actually work a deal: Property Info, then ARV/Value, then Repairs, then one Offer Generator that turns those three into a single Generated Offer. Auction comps, WV Assessment/appraisal data, and retail comps sit underneath as supporting market data -- there to help judge the offer, not to compete with it.</div>
+<div class="notice">Laid out in the order we actually work a deal: Property Info, then ARV (retail comps) and a separate Investor Market Range (auction comps), then Repairs, then one Offer Generator that turns those into a single Generated Offer -- the Offer Generator uses ARV specifically, not the Investor Market Range. Comparable Sales, WV Assessment/appraisal data, and Retail Comps sit underneath as supporting market data -- there to help judge the offer, not to compete with it.</div>
 
 <div class="panelhead" style="margin-top:24px"><h2>Property Info</h2></div>
 <div class="evalgrid">
@@ -133,20 +133,31 @@ a{color:#d7dce4}
 <button class="primary" onclick="analyzeProperty()">Analyze Property</button>
 <div class="small" id="evalSubjectLine" style="margin-top:10px"></div>
 
-<div class="panelhead" style="margin-top:28px"><h2>ARV / Value</h2></div>
-<div class="notice">Suggested Value is comps-led: median $/sq ft from verified auction comps AND sold retail comps in the same ZIP code &times; subject sq ft (only falls back to city if no ZIP is entered -- comps never cross ZIP codes when one's on file). Enter a Manual ARV below any time you want to use your own number instead.</div>
+<div class="panelhead" style="margin-top:28px"><h2>ARV (Retail Comps)</h2></div>
+<div class="notice">ARV is retail-only: driven by <strong>sold</strong> retail comps from DealMachine, matched on the same property type, similar size (within ~25% of subject sq ft), and progressively widened by distance from the subject address -- same street first, then within 0.5 miles, then within 1 mile, stopping at whichever radius first turns up a handful of solds. Most recent sales are prioritized within the matched radius. Auction comps are kept separate -- see Investor Market Range below -- and never factor into this ARV. Enter a Manual ARV below any time you want to use your own number instead.</div>
 <div class="metrics" style="grid-template-columns:repeat(5,minmax(0,1fr))">
- <div class="metric"><div class="bidlabel">Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
+ <div class="metric"><div class="bidlabel">Retail Comps Found</div><div class="bidvalue" id="mFound">0</div></div>
  <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="mLow">$0</div></div>
  <div class="metric"><div class="bidlabel">Median PPSF</div><div class="bidvalue" id="mMedian">$0</div></div>
  <div class="metric"><div class="bidlabel">High PPSF</div><div class="bidvalue" id="mHigh">$0</div></div>
- <div class="metric"><div class="bidlabel">Suggested Value</div><div class="bidvalue" id="mValue">$0</div></div>
+ <div class="metric"><div class="bidlabel">ARV (Suggested Value)</div><div class="bidvalue" id="mValue">$0</div></div>
 </div>
 <div class="evalgrid" style="grid-template-columns:minmax(0,1fr);margin-top:12px">
- <input id="manualArv" placeholder="Manual ARV $ (optional -- overrides Suggested Value and the Offer Generator's ARV below)" type="number" oninput="renderValueMetrics()">
+ <input id="manualArv" placeholder="Manual ARV $ (optional -- overrides ARV and the Offer Generator's ARV below)" type="number" oninput="renderValueMetrics()">
 </div>
-<div class="small" id="arvSourceNote" style="margin-top:10px"></div>
+<div class="small" id="retailMatchNote" style="margin-top:10px"></div>
+<div class="small" id="arvSourceNote" style="margin-top:6px"></div>
 <div class="small" id="appraisalCheck" style="margin-top:6px"></div>
+
+<div class="panelhead" style="margin-top:28px"><h2>Investor Market Range (Auction Comps)</h2></div>
+<div class="notice">Separate from ARV above -- this is what similar properties have actually sold for <strong>at auction</strong> in this market: same ZIP code (or city, only if no ZIP is entered), same property type, within 30% of subject sq ft. Useful context for gauging investor demand and typical winning-bid pricing here, but it's informational only -- it does not feed the Offer Generator.</div>
+<div class="metrics" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+ <div class="metric"><div class="bidlabel">Auction Comps Found</div><div class="bidvalue" id="iFound">0</div></div>
+ <div class="metric"><div class="bidlabel">Low PPSF</div><div class="bidvalue" id="iLow">$0</div></div>
+ <div class="metric"><div class="bidlabel">Median PPSF</div><div class="bidvalue" id="iMedian">$0</div></div>
+ <div class="metric"><div class="bidlabel">High PPSF</div><div class="bidvalue" id="iHigh">$0</div></div>
+ <div class="metric"><div class="bidlabel">Range Value (info only)</div><div class="bidvalue" id="iValue">$0</div></div>
+</div>
 
 <div class="panelhead" style="margin-top:28px"><h2>Repairs</h2></div>
 <div class="notice">Square footage &times; cost per sq ft = a rough rehab estimate, using the subject sq ft above. Pick a condition level, or type your own cost per sq ft if a house doesn't fit one of the labels -- this feeds straight into the Offer Generator's Repairs field below.</div>
@@ -168,7 +179,7 @@ a{color:#d7dce4}
 </div>
 
 <div class="panelhead" style="margin-top:28px"><h2>Offer Generator</h2></div>
-<div class="notice">Comp/ARV Value &minus; Repairs &minus; Desired Profit &minus; Other Costs = Generated Offer. ARV tracks ARV/Value above and Repairs tracks the calculator above, live -- type over either one and it's yours until you clear it back to empty. Desired Profit and Other Costs are yours to set.</div>
+<div class="notice">Comp/ARV Value &minus; Repairs &minus; Desired Profit &minus; Other Costs = Generated Offer. ARV tracks ARV (Retail Comps) above and Repairs tracks the calculator above, live -- type over either one and it's yours until you clear it back to empty. Desired Profit and Other Costs are yours to set.</div>
 <div class="evalgrid" style="grid-template-columns:repeat(4,minmax(0,1fr))">
  <input id="ogArv" placeholder="Comp/ARV value $" type="number" oninput="onOfferFieldInput('ogArv')">
  <input id="ogRepairs" placeholder="Repairs $" type="number" oninput="onOfferFieldInput('ogRepairs')">
@@ -182,7 +193,7 @@ a{color:#d7dce4}
 <div class="small" id="ogNote" style="margin-top:8px"></div>
 
 <div class="panelhead" style="margin-top:28px"><h2>Comparable Sales</h2></div>
-<div class="notice">Supporting data -- the verified auction comps behind the ARV/Value numbers above: same ZIP code (or city, only if no ZIP was entered), same property type, within 30% of subject sq ft.</div>
+<div class="notice">Supporting data -- the verified auction comps behind the Investor Market Range numbers above (not ARV, which is retail-only now): same ZIP code (or city, only if no ZIP was entered), same property type, within 30% of subject sq ft.</div>
 <div class="comparegrid" id="compareGrid"></div>
 
 <div class="panelhead" style="margin-top:28px"><h2>Property &amp; Assessment Data</h2></div>
@@ -199,7 +210,8 @@ a{color:#d7dce4}
 <div class="small" id="assessmentSource" style="margin-top:10px"></div>
 
 <div class="panelhead" style="margin-top:28px"><h2>Retail Comps</h2></div>
-<div class="notice">Nearby retail (non-auction) properties from DealMachine -- same ZIP code, same property type as the subject. Sold comps below are blended into the Low/Median/High/Suggested Value numbers in ARV/Value above, right alongside the auction comps. Active and Pending listings are shown separately, for context only -- they're not sales yet, so they never factor into the value math.</div>
+<div class="notice">Nearby retail (non-auction) properties from DealMachine, matched on property type and size first, then by distance from the subject address -- same street, then within 0.5 miles, then within 1 mile, widening only as far as needed to find a handful of solds. Sold comps (below, most recent first) drive ARV above. Active and Pending listings are shown separately, for context only -- an asking price isn't a sale, so they never factor into the value math.</div>
+<div class="small" id="retailGeoStatus" style="margin-bottom:6px"></div>
 <div class="small" id="retailCompsStatus" style="margin-bottom:10px"></div>
 <div class="comparegrid" id="retailCompsGrid"></div>
 </section>
@@ -244,6 +256,12 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let past = [], watch = [], retail = [];
 let evalCandidates = [];
 let evalRetailSold = [], evalRetailCurrent = [];
+// Which distance tier the most recent Analyze Property click actually used
+// for retail comps ("street" | "0.5mi" | "1mi" | "area"), and whether
+// geocoding the subject address failed -- both drive the small status line
+// above the Retail Comps grid. See matchRetailComps()/geocodeAddress().
+let lastRetailTier = null;
+let lastGeocodeFailed = false;
 // Set by analyzeProperty() whenever it computes a comps-based suggested
 // value -- the Offer Generator's ARV field auto-fills from this. Null
 // whenever there's no suggested value yet (no comps found, or no sq ft
@@ -291,6 +309,119 @@ const zillowUrl=r=>{
  const address=[r.address,r.city,r.state,r.zip].filter(Boolean).join(" ");
  return "https://www.zillow.com/homes/"+encodeURIComponent(address)+"_rb/";
 };
+
+// ---- Retail comp matching: same-street -> 0.5mi -> 1mi, size-banded ----
+// Per Travis's 2026-09-11 feedback: retail comps should no longer just be
+// same-ZIP -- prioritize the closest match first (same street), only widen
+// out to 0.5 then 1 mile if that doesn't turn up enough solds, still
+// require the same property type and a similar size, and favor the most
+// recent sales. This needs real distance, so the subject address gets
+// geocoded (see geocodeAddress() below) -- if that fails, retail comps fall
+// back to the old same-ZIP/city rule rather than showing nothing.
+const RETAIL_SIZE_BAND = 0.25; // +/-25% of subject sq ft (Travis said "20 to 30%" -- 25% is the midpoint, easy to tighten/loosen later)
+const RETAIL_MIN_COMPS = 3; // stop widening the radius once a tier has at least this many sold comps
+const RETAIL_TIER_LABELS = {
+ street: "on the same street",
+ "0.5mi": "within 0.5 miles",
+ "1mi": "within 1 mile",
+ area: "same ZIP/city (couldn't pin down the subject address, so this fell back to the old area-only match)",
+};
+
+function retailSizeMatch(r, subj){
+ // Can't judge size similarity without both numbers -- don't exclude the
+ // comp just because one side is missing, same philosophy as the auction
+ // side's sizeDiff===null handling.
+ if(!subj || !r.living_area_sqft) return true;
+ return Math.abs(r.living_area_sqft - subj) / subj <= RETAIL_SIZE_BAND;
+}
+
+const STREET_SUFFIX_MAP = {street:"st",avenue:"ave",boulevard:"blvd",drive:"dr",lane:"ln",road:"rd",court:"ct",circle:"cir",place:"pl",terrace:"ter",highway:"hwy",parkway:"pkwy",trail:"trl",crossing:"xing",loop:"loop",way:"way"};
+function normalizeStreetName(addr){
+ if(!addr) return "";
+ let s = addr.toLowerCase().trim();
+ s = s.replace(/^\d+[\d\-\/]*\s*/, "");           // strip leading house number
+ s = s.replace(/\b(apt|unit|#|suite|ste)\b.*$/, ""); // strip trailing unit info
+ s = s.replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
+ return s.split(" ").map(w => STREET_SUFFIX_MAP[w] || w).join(" ");
+}
+
+function haversineMiles(lat1, lon1, lat2, lon2){
+ if(lat1==null || lon1==null || lat2==null || lon2==null) return null;
+ const R = 3958.8; // Earth radius in miles
+ const toRad = d => d * Math.PI / 180;
+ const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+ const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+ return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Free, no-API-key geocoder (OpenStreetMap Nominatim) -- results are cached
+// per normalized address for the life of the page, so re-analyzing the same
+// address never re-hits it. Subject to Nominatim's fair-use rate limit
+// (about 1 req/sec), which a single button click stays well within.
+const geocodeCache = {};
+async function geocodeAddress(fullAddress){
+ const key = (fullAddress||"").toLowerCase().trim();
+ if(!key) return null;
+ if(key in geocodeCache) return geocodeCache[key];
+ try {
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=" + encodeURIComponent(fullAddress);
+  const resp = await fetch(url, {headers:{"Accept":"application/json"}});
+  if(!resp.ok) throw new Error("Geocoding request failed: HTTP " + resp.status);
+  const data = await resp.json();
+  const result = (data && data[0] && data[0].lat && data[0].lon) ? {lat:+data[0].lat, lng:+data[0].lon} : null;
+  geocodeCache[key] = result;
+  return result;
+ } catch(e){
+  console.warn("Geocoding failed for", fullAddress, e);
+  geocodeCache[key] = null;
+  return null;
+ }
+}
+
+// Returns {tierUsed, sold, current} for the subject. sold is sorted most-
+// recent-sale-first. Falls back to the plain same-ZIP/city rule (tier
+// "area") when the subject couldn't be geocoded.
+function matchRetailComps(subjStreet, subjLat, subjLng, subjType, subj, zip, city){
+ const pool = retail.filter(r=>retailPropertyType(r)===subjType).filter(r=>retailSizeMatch(r,subj));
+
+ if(subjLat==null || subjLng==null){
+  const areaMatch = r => zip ? r.zip===zip : (city ? (r.city||"").toLowerCase()===city : false);
+  const inArea = pool.filter(areaMatch);
+  return {
+   tierUsed: "area",
+   sold: inArea.filter(usableRetailSoldComp).sort((a,b)=>(b.last_sale_date||"").localeCompare(a.last_sale_date||"")),
+   current: inArea.filter(r=>r.comp_status==="active"||r.comp_status==="pending"),
+  };
+ }
+
+ const withDist = pool.map(r=>({
+  ...r,
+  _distMi: haversineMiles(subjLat, subjLng, r.lat, r.lng),
+  _sameStreet: !!(subjStreet && normalizeStreetName(r.address)===subjStreet),
+ }));
+
+ // Each tier is a superset of the one before it -- widening outward, never
+ // narrower -- so a same-street comp still counts once we've widened to 1mi.
+ const tiers = [
+  {name:"street", test:r=>r._sameStreet},
+  {name:"0.5mi", test:r=>r._sameStreet || (r._distMi!=null && r._distMi<=0.5)},
+  {name:"1mi", test:r=>r._sameStreet || (r._distMi!=null && r._distMi<=1)},
+ ];
+
+ let chosen=[], chosenTier="1mi";
+ for(const tier of tiers){
+  const inTier = withDist.filter(tier.test);
+  const soldCount = inTier.filter(usableRetailSoldComp).length;
+  chosen = inTier; chosenTier = tier.name;
+  if(soldCount >= RETAIL_MIN_COMPS) break; // tight enough -- stop widening
+ }
+
+ return {
+  tierUsed: chosenTier,
+  sold: chosen.filter(usableRetailSoldComp).sort((a,b)=>(b.last_sale_date||"").localeCompare(a.last_sale_date||"")),
+  current: chosen.filter(r=>r.comp_status==="active"||r.comp_status==="pending"),
+ };
+}
 
 function showTab(id,btn){
  document.querySelectorAll(".section").forEach(el=>el.classList.remove("active"));
@@ -607,65 +738,74 @@ function renderAssessmentPanel(match){
  if(match.property_type && [...typeSelect.options].some(o=>o.value===match.property_type)) typeSelect.value=match.property_type;
 }
 
-function analyzeProperty(){
- const address=(document.getElementById("eAddress").value||"").trim();
- const city=(document.getElementById("eCity").value||"").trim().toLowerCase();
- const zip=(document.getElementById("eZip").value||"").trim();
+async function analyzeProperty(){
+ const btn = document.querySelector('button[onclick="analyzeProperty()"]');
+ if(btn) btn.disabled = true;
+ try {
+  const address=(document.getElementById("eAddress").value||"").trim();
+  const city=(document.getElementById("eCity").value||"").trim().toLowerCase();
+  const zip=(document.getElementById("eZip").value||"").trim();
 
- const match=matchRecordByAddress(address,zip);
- lastMatch = match;
- renderAssessmentPanel(match);
- updateRehabEstimate(); // refresh in case the match just auto-filled sq ft
+  const match=matchRecordByAddress(address,zip);
+  lastMatch = match;
+  renderAssessmentPanel(match);
+  updateRehabEstimate(); // refresh in case the match just auto-filled sq ft
 
- const type=document.getElementById("eType").value;
- const subj=+document.getElementById("eSqft").value||0;
+  const type=document.getElementById("eType").value;
+  const subj=+document.getElementById("eSqft").value||0;
 
- document.getElementById("evalSubjectLine").textContent = address ? `Evaluating: ${address}` : "";
+  document.getElementById("evalSubjectLine").textContent = address ? `Evaluating: ${address}` : "";
 
- evalCandidates = past
-  .filter(usableComp)
-  .filter(r=>r.property_type===type)
-  .filter(r=>{
-    // Comps must stay in the same ZIP code -- a ZIP entered above is a
-    // hard requirement, never loosened by an OR against city (city alone
-    // can span very different micro-markets within it). City is only used
-    // as a fallback when no ZIP was entered at all.
-    if(zip) return r.zip===zip;
-    if(city) return (r.city||"").toLowerCase()===city;
-    return false;
-  })
-  .map(r=>({...r,sizeDiff:subj?Math.abs(r.comp_sqft-subj)/subj:null}))
-  .filter(r=>r.sizeDiff===null || r.sizeDiff<=.30)
-  .sort((a,b)=>{
-    // Strongest comps first: same ZIP, then same city, then closest size.
-    // Property type is already a hard filter above, so every candidate here
-    // already matches on that.
-    const azip=(zip&&a.zip===zip)?0:1, bzip=(zip&&b.zip===zip)?0:1;
-    if(azip!==bzip) return azip-bzip;
-    const acity=(city&&(a.city||"").toLowerCase()===city)?0:1, bcity=(city&&(b.city||"").toLowerCase()===city)?0:1;
-    if(acity!==bcity) return acity-bcity;
-    if(a.sizeDiff!==null&&b.sizeDiff!==null) return a.sizeDiff-b.sizeDiff;
-    if(a.sizeDiff!==null) return -1;
-    if(b.sizeDiff!==null) return 1;
-    return (b.auction_date||"").localeCompare(a.auction_date||"");
-  });
+  // Investor Market Range (auction comps) -- unchanged same-ZIP-first,
+  // same-city-fallback rule, kept completely separate from retail/ARV now.
+  evalCandidates = past
+   .filter(usableComp)
+   .filter(r=>r.property_type===type)
+   .filter(r=>{
+     if(zip) return r.zip===zip;
+     if(city) return (r.city||"").toLowerCase()===city;
+     return false;
+   })
+   .map(r=>({...r,sizeDiff:subj?Math.abs(r.comp_sqft-subj)/subj:null}))
+   .filter(r=>r.sizeDiff===null || r.sizeDiff<=.30)
+   .sort((a,b)=>{
+     const azip=(zip&&a.zip===zip)?0:1, bzip=(zip&&b.zip===zip)?0:1;
+     if(azip!==bzip) return azip-bzip;
+     const acity=(city&&(a.city||"").toLowerCase()===city)?0:1, bcity=(city&&(b.city||"").toLowerCase()===city)?0:1;
+     if(acity!==bcity) return acity-bcity;
+     if(a.sizeDiff!==null&&b.sizeDiff!==null) return a.sizeDiff-b.sizeDiff;
+     if(a.sizeDiff!==null) return -1;
+     if(b.sizeDiff!==null) return 1;
+     return (b.auction_date||"").localeCompare(a.auction_date||"");
+   });
 
- // Retail comps (DealMachine) get the exact same same-ZIP-first, same-city-
- // fallback rule as auction comps -- never a looser match just because
- // they're from a different data source.
- const retailZipCityMatch = r => {
-   if(zip) return r.zip===zip;
-   if(city) return (r.city||"").toLowerCase()===city;
-   return false;
- };
- const retailTypeMatch = r => retailPropertyType(r)===type;
- evalRetailSold = retail.filter(usableRetailSoldComp).filter(retailTypeMatch).filter(retailZipCityMatch);
- evalRetailCurrent = retail.filter(r=>r.comp_status==="active"||r.comp_status==="pending")
-   .filter(retailTypeMatch).filter(retailZipCityMatch);
+  renderInvestorRange(evalCandidates.map(getPpsf).filter(Boolean));
+  renderEvaluator(evalCandidates.map(getPpsf).filter(Boolean));
 
- renderValueMetrics();
- renderEvaluator(evalCandidates.map(getPpsf).filter(Boolean));
- renderRetailComps();
+  // ARV (retail comps) -- geocode the subject so we can prioritize same
+  // street, then 0.5mi, then 1mi. See matchRetailComps().
+  const geoStatus=document.getElementById("retailGeoStatus");
+  let subjLat=null, subjLng=null;
+  lastGeocodeFailed=false;
+  if(address){
+   geoStatus.textContent="Locating subject address for retail comp matching...";
+   const geo = await geocodeAddress([address,city,zip].filter(Boolean).join(", "));
+   if(geo){ subjLat=geo.lat; subjLng=geo.lng; }
+   else { lastGeocodeFailed=true; }
+  }
+  geoStatus.textContent="";
+
+  const subjStreet = normalizeStreetName(address);
+  const {tierUsed, sold, current} = matchRetailComps(subjStreet, subjLat, subjLng, type, subj, zip, city);
+  evalRetailSold = sold;
+  evalRetailCurrent = current;
+  lastRetailTier = tierUsed;
+
+  renderValueMetrics();
+  renderRetailComps();
+ } finally {
+  if(btn) btn.disabled = false;
+ }
 }
 
 // Suggested Value and the appraisal check come from here, and it's what
@@ -681,13 +821,31 @@ function analyzeProperty(){
 // re-analysis) whenever Manual ARV changes, so the Offer Generator always
 // reflects what's currently on screen.
 function renderValueMetrics(){
- // Low/Median/High/Suggested Value are computed from auction comps AND sold
- // retail comps together, one blended pool -- both are real closed sales in
- // the same ZIP code and property type, so there's no reason to treat one
- // as more authoritative than the other. Active/Pending retail listings are
- // never included here (see usableRetailSoldComp).
- const vals=evalCandidates.map(getPpsf).filter(Boolean).concat(evalRetailSold.map(getRetailPpsf).filter(Boolean));
- document.getElementById("mFound").textContent=evalCandidates.length+evalRetailSold.length;
+ // ARV is retail-only now (per Travis's 2026-09-11 feedback): Low/Median/
+ // High/ARV come from sold retail comps alone -- same-street/0.5mi/1mi
+ // tiered matching, see matchRetailComps(). Auction comps never factor in
+ // here anymore; they get their own Investor Market Range panel instead
+ // (see renderInvestorRange()). Active/Pending retail listings still never
+ // count toward this (see usableRetailSoldComp).
+ const vals=evalRetailSold.map(getRetailPpsf).filter(Boolean);
+ document.getElementById("mFound").textContent=evalRetailSold.length;
+
+ const matchNote=document.getElementById("retailMatchNote");
+ if(lastRetailTier){
+  const verb = evalRetailSold.length ? "Matched" : "Searched";
+  const thin = evalRetailSold.length && evalRetailSold.length < RETAIL_MIN_COMPS;
+  let noteText = `${verb} ${RETAIL_TIER_LABELS[lastRetailTier]}${evalRetailCurrent.length?` -- also see ${evalRetailCurrent.length} active/pending listing${evalRetailCurrent.length===1?"":"s"} below (context only)`:""}.`;
+  // Even at the widest 1-mile radius, sometimes there just aren't many
+  // sold comps -- with only 1-2 sales, one unusual price (a quitclaim, a
+  // distressed sale that still cleared the sanity filter) can swing the
+  // median a lot. Flag it rather than presenting a thin sample with full
+  // confidence.
+  if(thin) noteText += ` Only ${evalRetailSold.length} sold comp${evalRetailSold.length===1?"":"s"} found even at this radius -- treat this ARV as low-confidence and sanity-check it against the Investor Market Range and WV Assessment numbers below.`;
+  matchNote.textContent = noteText;
+  matchNote.className = (lastRetailTier==="area" || thin) ? "small warn" : "small";
+ } else {
+  matchNote.textContent="";
+ }
 
  const subj=+document.getElementById("eSqft").value||0;
  const manual=manualArvValue();
@@ -724,7 +882,7 @@ function renderValueMetrics(){
  if(compsValue && lastMatch && lastMatch.comp_total_appraisal){
   const diff=(compsValue-lastMatch.comp_total_appraisal)/lastMatch.comp_total_appraisal;
   if(Math.abs(diff)>=.20){
-   appraisalCheck.textContent=`Comps-based suggested value is ${Math.round(Math.abs(diff)*100)}% ${diff>0?"higher":"lower"} than WV Assessment's total appraisal (${money(lastMatch.comp_total_appraisal)}) -- worth a second look before relying on either number alone.`;
+   appraisalCheck.textContent=`Retail-comps ARV is ${Math.round(Math.abs(diff)*100)}% ${diff>0?"higher":"lower"} than WV Assessment's total appraisal (${money(lastMatch.comp_total_appraisal)}) -- worth a second look before relying on either number alone.`;
    appraisalCheck.className="small warn";
   } else {
    appraisalCheck.textContent=`Consistent with WV Assessment's total appraisal (${money(lastMatch.comp_total_appraisal)}).`;
@@ -734,6 +892,23 @@ function renderValueMetrics(){
 
  lastSuggestedValue = suggestedValue;
  autoFillOffer();
+}
+
+// Investor Market Range -- auction comps only, purely informational (see
+// the panel notice). Does not touch lastSuggestedValue/autoFillOffer; the
+// Offer Generator's ARV field is fed by renderValueMetrics() (retail) only.
+function renderInvestorRange(vals){
+ document.getElementById("iFound").textContent = evalCandidates.length;
+ const subj=+document.getElementById("eSqft").value||0;
+ if(vals.length){
+  const low=Math.min(...vals), med=percentile(vals,.5), high=Math.max(...vals);
+  document.getElementById("iLow").textContent="$"+low.toFixed(2);
+  document.getElementById("iMedian").textContent="$"+med.toFixed(2);
+  document.getElementById("iHigh").textContent="$"+high.toFixed(2);
+  document.getElementById("iValue").textContent = subj ? money(subj*med) : "$0";
+ } else {
+  ["iLow","iMedian","iHigh","iValue"].forEach(id=>document.getElementById(id).textContent="$0");
+ }
 }
 
 function renderEvaluator(vals){
@@ -761,12 +936,20 @@ function renderRetailComps(){
   return;
  }
  if(!evalRetailSold.length && !evalRetailCurrent.length){
-  status.textContent="No retail comps on file yet for this ZIP code, city, and property type combination.";
+  status.textContent = lastRetailTier
+   ? `No retail comps on file within 1 mile (${RETAIL_TIER_LABELS[lastRetailTier]}) matching this property type and size -- this area may not be covered yet, or is genuinely light on nearby retail sales.`
+   : "No retail comps on file yet for this property type in this area.";
   status.className="small";
   return;
  }
- status.textContent=`${evalRetailSold.length} sold retail comp${evalRetailSold.length===1?"":"s"} (blended into ARV/Value above) and ${evalRetailCurrent.length} current listing${evalRetailCurrent.length===1?"":"s"} (context only).`;
+ status.textContent=`${evalRetailSold.length} sold retail comp${evalRetailSold.length===1?"":"s"} (drives ARV above, ${RETAIL_TIER_LABELS[lastRetailTier]||"matched"}) and ${evalRetailCurrent.length} active/pending listing${evalRetailCurrent.length===1?"":"s"} (context only).`;
  status.className="small";
+
+ const distanceLine = r => {
+  if(r._sameStreet) return `<div class="meta">Same street</div>`;
+  if(r._distMi!=null) return `<div class="meta">${r._distMi.toFixed(1)} mi away</div>`;
+  return "";
+ };
 
  const renderCard=(r,kind)=>{
   const div=document.createElement("div");div.className="comp";
@@ -784,7 +967,7 @@ function renderRetailComps(){
    metaLine=`${r.listing_date?`Listed ${r.listing_date}`:""} · ${r.comp_status==="pending"?"Pending":"Active"} listing (not blended into value)`;
   }
   div.innerHTML=`<div class="comptitle">${[r.address,r.city].filter(Boolean).join(", ")}</div><div class="meta">${metaLine}</div><div class="price">${priceLine}</div>
-  <div class="county"><div class="meta">Sq Ft: ${sqft}</div>${bedsBaths?`<div class="meta">${bedsBaths}</div>`:""}${ppsfLine}<div class="meta">Source: DealMachine</div></div>
+  <div class="county">${distanceLine(r)}<div class="meta">Sq Ft: ${sqft}</div>${bedsBaths?`<div class="meta">${bedsBaths}</div>`:""}${ppsfLine}<div class="meta">Source: DealMachine</div></div>
   <div style="margin-top:10px;display:flex;gap:8px"><a class="linkbtn" href="${zillowUrl(r)}" target="_blank" rel="noopener" title="Opens a Zillow search for this address. Zillow's own listing (if any) is independent of our data and may differ.">Search Zillow (unverified)</a></div>`;
   grid.appendChild(div);
  };
